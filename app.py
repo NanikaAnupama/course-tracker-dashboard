@@ -588,7 +588,7 @@ with tab_subjects:
         lc, rc = st.columns(2)
         with lc:
             st.markdown("#### Average Completion by Subject Area")
-            st.markdown("*How close each department is to finishing all content*")
+            st.markdown("*How close each subject area is to finishing all content*")
             fsg = go.Figure(go.Bar(y=sdf['Subject Area'], x=sdf['Avg Completion %'].round(1), orientation='h',
                 marker=dict(color=sdf['Avg Completion %'], colorscale=[[0,'#ef4444'],[0.5,'#f59e0b'],[1,'#10b981']], cmin=0, cmax=100, showscale=False),
                 text=sdf['Avg Completion %'].round(1).astype(str)+'%', textposition='outside', textfont=dict(color='white', size=14)))
@@ -603,7 +603,7 @@ with tab_subjects:
             
         with rc:
             st.markdown("#### Pending AI Videos, Podcasts & Study Guides by Subject")
-            st.markdown("*Which departments have the heaviest remaining workload?*")
+            st.markdown("*Which subject area have the heaviest remaining workload?*")
             sp = df.groupby('Subject Area').agg({'Videos Pending': 'sum', 'Podcasts Pending': 'sum', 'Guides Pending': 'sum'}).reset_index()
             sp['Total'] = sp['Videos Pending'] + sp['Podcasts Pending'] + sp['Guides Pending']
             sp = sp[sp['Subject Area'].isin(sdf['Subject Area'])].sort_values('Total', ascending=True)

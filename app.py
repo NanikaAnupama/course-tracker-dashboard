@@ -288,6 +288,9 @@ GRID_COLOR = 'rgba(255,255,255,0.08)'
 LEGEND_FONT = dict(size=13, color='#e2e8f0')
 CHART_BG = 'rgba(0,0,0,0)'
 
+# ── Shared Plotly config to disable scrollZoom and unwanted interactions ──
+PLOTLY_CONFIG = dict(scrollZoom=False, displayModeBar=False)
+
 
 # --- ROBUST DATA CLEANING FUNCTION ---
 def clean_and_preprocess(df):
@@ -432,6 +435,9 @@ tab_overview, tab_content, tab_subjects, tab_quickwins, tab_priority, tab_allcou
     "✅ Quick Wins", "⚠️ Priority Watch", "📋 All Courses"
 ])
 
+# ═══════════════════════════════════════════════════════════════════
+#  TAB 1 — OVERVIEW
+# ═══════════════════════════════════════════════════════════════════
 with tab_overview:
     st.markdown("## Executive Summary")
     st.markdown("*High-level view of content production across AI Videos, Podcasts, and Study Guides*")
@@ -458,7 +464,7 @@ with tab_overview:
     progress_fig.update_traces(cliponaxis=False)
     progress_fig.update_layout(xaxis=dict(range=[0, 110], title=dict(text="Completion %", font=AXIS_TITLE_FONT), tickfont=AXIS_TICK_FONT, gridcolor=GRID_COLOR),
         yaxis=dict(visible=False), height=100, margin=dict(l=0, r=0, t=10, b=40), showlegend=False, paper_bgcolor=CHART_BG, plot_bgcolor=CHART_BG)
-    st.plotly_chart(progress_fig, use_container_width=True)
+    st.plotly_chart(progress_fig, use_container_width=True, config=PLOTLY_CONFIG)
     st.markdown("<br>", unsafe_allow_html=True)
 
     if overall_completion < 30:
@@ -491,7 +497,7 @@ with tab_overview:
         tp_fig.update_traces(cliponaxis=False)
         tp_fig.update_layout(xaxis=dict(range=[0, 115], title=dict(text="Completion %", font=AXIS_TITLE_FONT), tickfont=AXIS_TICK_FONT, gridcolor=GRID_COLOR),
             yaxis=dict(tickfont=dict(color='#e2e8f0', size=14), automargin=True), height=260, margin=dict(l=0, r=0, t=10, b=40), paper_bgcolor=CHART_BG, plot_bgcolor=CHART_BG)
-        st.plotly_chart(tp_fig, use_container_width=True)
+        st.plotly_chart(tp_fig, use_container_width=True, config=PLOTLY_CONFIG)
         
         st.markdown(f'<div class="insight-card" style="max-width: 100%;"><strong>🎯 Content Progress:</strong> The highest completion rate is in <strong>{max([("AI Videos", video_pct), ("Podcasts", podcast_pct), ("Study Guides", guide_pct)], key=lambda item:item[1])[0]}</strong>, while the lowest is in <strong>{min([("AI Videos", video_pct), ("Podcasts", podcast_pct), ("Study Guides", guide_pct)], key=lambda item:item[1])[0]}</strong>.</div>', unsafe_allow_html=True)
         
@@ -508,10 +514,14 @@ with tab_overview:
             hovertemplate="<b>%{label}</b><br>Count: %{value}<br>Share: %{percent}<extra></extra>"
         )
         fs.update_layout(height=260, margin=dict(t=10, b=10, l=10, r=10), legend=dict(font=LEGEND_FONT, bgcolor=CHART_BG), paper_bgcolor=CHART_BG, plot_bgcolor=CHART_BG)
-        st.plotly_chart(fs, use_container_width=True)
+        st.plotly_chart(fs, use_container_width=True, config=PLOTLY_CONFIG)
         
         st.markdown(f'<div class="insight-card" style="max-width: 100%;"><strong>📊 Status Overview:</strong> <strong>{complete_courses}</strong> courses are fully complete, while <strong>{not_started_courses}</strong> remain untouched.</div>', unsafe_allow_html=True)
 
+
+# ═══════════════════════════════════════════════════════════════════
+#  TAB 2 — CONTENT ANALYSIS
+# ═══════════════════════════════════════════════════════════════════
 with tab_content:
     st.markdown("## Content Type Analysis")
     st.markdown("*Identifying which content type — AI Videos, Podcasts, or Study Guides — is slowing us down*")
@@ -526,13 +536,15 @@ with tab_content:
             'Required': [total_units, total_units, total_units]})
         cd['Completion %'] = (cd['Completed'] / cd['Required'] * 100).round(1)
         fc = go.Figure()
-        fc.add_trace(go.Bar(name='Completed', x=cd['Content Type'], y=cd['Completed'], marker_color='#10b981', text=cd['Completed'], textposition='inside', textfont=LABEL_FONT))
-        fc.add_trace(go.Bar(name='Still Pending', x=cd['Content Type'], y=cd['Pending'], marker_color='#ef4444', text=cd['Pending'], textposition='inside', textfont=LABEL_FONT))
+        fc.add_trace(go.Bar(name='Completed', x=cd['Content Type'], y=cd['Completed'], marker_color='#10b981',
+            text=cd['Completed'].astype(int), textposition='inside', textfont=LABEL_FONT))
+        fc.add_trace(go.Bar(name='Still Pending', x=cd['Content Type'], y=cd['Pending'], marker_color='#ef4444',
+            text=cd['Pending'].astype(int), textposition='inside', textfont=LABEL_FONT))
         fc.update_traces(cliponaxis=False)
         fc.update_layout(barmode='stack', legend=dict(orientation="h", yanchor="bottom", y=1.02, font=LEGEND_FONT), height=420, margin=dict(t=60, b=20, l=20, r=20),
             paper_bgcolor=CHART_BG, plot_bgcolor=CHART_BG, xaxis=dict(tickfont=dict(color='#e2e8f0', size=14)),
             yaxis=dict(title=dict(text="Number of Items", font=AXIS_TITLE_FONT), tickfont=AXIS_TICK_FONT, gridcolor=GRID_COLOR))
-        st.plotly_chart(fc, use_container_width=True)
+        st.plotly_chart(fc, use_container_width=True, config=PLOTLY_CONFIG)
         
         st.markdown(f'<div class="insight-card" style="max-width: 100%;"><strong>📦 Volume Insight:</strong> A total of <strong>{int(total_completed)}</strong> contents (videos, podcast, guides) have been created so far, with <strong>{int(total_pending)}</strong> remaining across all active courses.</div>', unsafe_allow_html=True)
         
@@ -549,7 +561,7 @@ with tab_content:
         rf.update_traces(cliponaxis=False)
         rf.update_layout(xaxis=dict(range=[0, 115], title=dict(text="Completion %", font=AXIS_TITLE_FONT), tickfont=AXIS_TICK_FONT, gridcolor=GRID_COLOR),
             yaxis=dict(tickfont=dict(color='#e2e8f0', size=14), automargin=True), height=420, margin=dict(t=60, b=20, l=0, r=20), paper_bgcolor=CHART_BG, plot_bgcolor=CHART_BG)
-        st.plotly_chart(rf, use_container_width=True)
+        st.plotly_chart(rf, use_container_width=True, config=PLOTLY_CONFIG)
         
         bm = {'AI Videos': video_pct, 'Podcasts': podcast_pct, 'Study Guides': guide_pct}
         bn = min(bm, key=bm.get); bp = bm[bn]; best = max(bm, key=bm.get); bestp = bm[best]; gap = bestp - bp
@@ -573,6 +585,10 @@ with tab_content:
     tg = gdf.iloc[0]
     st.markdown(f'<div class="insight-card"><strong>📋 Biggest Gap:</strong> "<strong>{tg["Course Name"]}</strong>" needs <strong>{int(tg["Videos Gap"])} AI Videos</strong>, <strong>{int(tg["Podcasts Gap"])} Podcasts</strong>, <strong>{int(tg["Guides Gap"])} Study Guides</strong>.</div>', unsafe_allow_html=True)
 
+
+# ═══════════════════════════════════════════════════════════════════
+#  TAB 3 — SUBJECT & LEVEL
+# ═══════════════════════════════════════════════════════════════════
 with tab_subjects:
     st.markdown("## Performance by Subject Area & Level")
     st.markdown("*Which Subject Area and levels need attention for AI Videos, Podcasts, and Study Guides*")
@@ -596,26 +612,47 @@ with tab_subjects:
             fsg.update_traces(cliponaxis=False)
             fsg.update_layout(xaxis=dict(range=[0, 115], title=dict(text="Avg Completion %", font=AXIS_TITLE_FONT), tickfont=AXIS_TICK_FONT, gridcolor=GRID_COLOR),
                 yaxis=dict(title="", tickfont=dict(color='#e2e8f0', size=12), automargin=True), height=450, margin=dict(t=10, b=20, l=10, r=70), paper_bgcolor=CHART_BG, plot_bgcolor=CHART_BG)
-            st.plotly_chart(fsg, use_container_width=True)
+            st.plotly_chart(fsg, use_container_width=True, config=PLOTLY_CONFIG)
             
             bs = sdf.iloc[-1]; ws = sdf.iloc[0]
             st.markdown(f'<div class="insight-card" style="max-width: 100%;"><strong>🏆 Top & Bottom Subjects:</strong> <strong>{bs["Subject Area"]}</strong> leads with {bs["Avg Completion %"]:.1f}%, while <strong>{ws["Subject Area"]}</strong> lags at {ws["Avg Completion %"]:.1f}%.</div>', unsafe_allow_html=True)
             
         with rc:
             st.markdown("#### Pending AI Videos, Podcasts & Study Guides by Subject")
-            st.markdown("*Which subject area have the heaviest remaining workload?*")
+            st.markdown("*Hover over segments for exact values*")
             sp = df.groupby('Subject Area').agg({'Videos Pending': 'sum', 'Podcasts Pending': 'sum', 'Guides Pending': 'sum'}).reset_index()
             sp['Total'] = sp['Videos Pending'] + sp['Podcasts Pending'] + sp['Guides Pending']
             sp = sp[sp['Subject Area'].isin(sdf['Subject Area'])].sort_values('Total', ascending=True)
+            
+            # Smart text: only show numbers inside segments that are wide enough to read
+            sp_max = sp['Total'].max() if len(sp) > 0 else 1
+            sp_thresh = sp_max * 0.07
+            
             pf = go.Figure()
-            pf.add_trace(go.Bar(y=sp['Subject Area'], x=sp['Videos Pending'], name='AI Videos', marker_color='#f59e0b', orientation='h', text=sp['Videos Pending'], textposition='auto', textfont=dict(color='white', size=12), insidetextanchor='middle'))
-            pf.add_trace(go.Bar(y=sp['Subject Area'], x=sp['Podcasts Pending'], name='Podcasts', marker_color='#0ea5e9', orientation='h', text=sp['Podcasts Pending'], textposition='auto', textfont=dict(color='white', size=12), insidetextanchor='middle'))
-            pf.add_trace(go.Bar(y=sp['Subject Area'], x=sp['Guides Pending'], name='Study Guides', marker_color='#10b981', orientation='h', text=sp['Guides Pending'], textposition='auto', textfont=dict(color='white', size=12), insidetextanchor='middle'))
+            pf.add_trace(go.Bar(y=sp['Subject Area'], x=sp['Videos Pending'], name='AI Videos', marker_color='#f59e0b', orientation='h',
+                text=[str(int(v)) if v >= sp_thresh else '' for v in sp['Videos Pending']],
+                textposition='inside', textfont=dict(color='white', size=13, family='Arial Black'), insidetextanchor='middle',
+                hovertemplate='<b>%{y}</b><br>AI Videos Pending: %{x}<extra></extra>'))
+            pf.add_trace(go.Bar(y=sp['Subject Area'], x=sp['Podcasts Pending'], name='Podcasts', marker_color='#0ea5e9', orientation='h',
+                text=[str(int(v)) if v >= sp_thresh else '' for v in sp['Podcasts Pending']],
+                textposition='inside', textfont=dict(color='white', size=13, family='Arial Black'), insidetextanchor='middle',
+                hovertemplate='<b>%{y}</b><br>Podcasts Pending: %{x}<extra></extra>'))
+            pf.add_trace(go.Bar(y=sp['Subject Area'], x=sp['Guides Pending'], name='Study Guides', marker_color='#10b981', orientation='h',
+                text=[str(int(v)) if v >= sp_thresh else '' for v in sp['Guides Pending']],
+                textposition='inside', textfont=dict(color='white', size=13, family='Arial Black'), insidetextanchor='middle',
+                hovertemplate='<b>%{y}</b><br>Study Guides Pending: %{x}<extra></extra>'))
+            
+            # Total annotations at end of each bar
+            for _, row in sp.iterrows():
+                pf.add_annotation(x=row['Total'], y=row['Subject Area'],
+                    text=f"  {int(row['Total'])}", showarrow=False, xanchor='left',
+                    font=dict(color='#94a3b8', size=12, family='Arial'))
+            
             pf.update_traces(cliponaxis=False)
-            pf.update_layout(barmode='stack', xaxis=dict(title=dict(text="Pending Items", font=AXIS_TITLE_FONT), tickfont=AXIS_TICK_FONT, gridcolor=GRID_COLOR, range=[0, sp['Total'].max() * 1.15]),
-                yaxis=dict(title="", tickfont=dict(color='#e2e8f0', size=12), automargin=True), height=450, margin=dict(t=10, b=20, l=10, r=20),
+            pf.update_layout(barmode='stack', xaxis=dict(title=dict(text="Pending Items", font=AXIS_TITLE_FONT), tickfont=AXIS_TICK_FONT, gridcolor=GRID_COLOR, range=[0, sp['Total'].max() * 1.2]),
+                yaxis=dict(title="", tickfont=dict(color='#e2e8f0', size=12), automargin=True), height=450, margin=dict(t=10, b=20, l=10, r=60),
                 paper_bgcolor=CHART_BG, plot_bgcolor=CHART_BG, legend=dict(orientation="h", yanchor="bottom", y=1.02, font=LEGEND_FONT, bgcolor=CHART_BG))
-            st.plotly_chart(pf, use_container_width=True)
+            st.plotly_chart(pf, use_container_width=True, config=PLOTLY_CONFIG)
             
             max_pending = sp.iloc[-1]
             st.markdown(f'<div class="warning-card" style="max-width: 100%;"><strong>🏋️ Heaviest Workload:</strong> <strong>{max_pending["Subject Area"]}</strong> requires the most effort, needing <strong>{int(max_pending["Total"])}</strong> combined items.</div>', unsafe_allow_html=True)
@@ -645,27 +682,50 @@ with tab_subjects:
             fl.update_layout(yaxis=dict(range=[0, 115], title=dict(text="Avg Completion %", font=AXIS_TITLE_FONT), tickfont=AXIS_TICK_FONT, gridcolor=GRID_COLOR),
                 xaxis=dict(title=dict(text="Course Level", font=AXIS_TITLE_FONT), tickfont=dict(color='#e2e8f0', size=13), automargin=True),
                 height=420, margin=dict(t=10, b=20, l=20, r=20), paper_bgcolor=CHART_BG, plot_bgcolor=CHART_BG)
-            st.plotly_chart(fl, use_container_width=True)
+            st.plotly_chart(fl, use_container_width=True, config=PLOTLY_CONFIG)
             
             lds = ldf.sort_values('Avg Completion %'); wl = lds.iloc[0]; bl = lds.iloc[-1]
             st.markdown(f'<div class="insight-card" style="max-width: 100%;"><strong>📊 Level Highlights:</strong> <strong>{bl["Course Level"]}</strong> is the most complete at {bl["Avg Completion %"]:.1f}%, while <strong>{wl["Course Level"]}</strong> is trailing at {wl["Avg Completion %"]:.1f}%.</div>', unsafe_allow_html=True)
             
         with rc:
             st.markdown("#### Pending Items by Course Level")
-            st.markdown("*Stacked bars show AI Videos, Podcasts, Study Guides still needed*")
+            st.markdown("*Hover over segments for exact values*")
             lp = df.groupby('Course Level').agg({'Videos Pending': 'sum', 'Podcasts Pending': 'sum', 'Guides Pending': 'sum'}).reset_index()
             lp['Order'] = lp['Course Level'].apply(lambda x: lo.index(x) if x in lo else 99)
             lp = lp.sort_values('Order')
             lp['Total'] = lp['Videos Pending'] + lp['Podcasts Pending'] + lp['Guides Pending']
+            
+            # Smart text: only show numbers in segments tall enough to read
+            lp_max = lp['Total'].max() if len(lp) > 0 else 1
+            lp_thresh = lp_max * 0.07
+            
             lpf = go.Figure()
-            lpf.add_trace(go.Bar(x=lp['Course Level'], y=lp['Videos Pending'], name='AI Videos', marker_color='#f59e0b', text=lp['Videos Pending'], textposition='outside', textfont=dict(color='white', size=13)))
-            lpf.add_trace(go.Bar(x=lp['Course Level'], y=lp['Podcasts Pending'], name='Podcasts', marker_color='#0ea5e9', text=lp['Podcasts Pending'], textposition='outside', textfont=dict(color='white', size=13)))
-            lpf.add_trace(go.Bar(x=lp['Course Level'], y=lp['Guides Pending'], name='Study Guides', marker_color='#10b981', text=lp['Guides Pending'], textposition='outside', textfont=dict(color='white', size=13)))
+            lpf.add_trace(go.Bar(x=lp['Course Level'], y=lp['Videos Pending'], name='AI Videos', marker_color='#f59e0b',
+                text=[str(int(v)) if v >= lp_thresh else '' for v in lp['Videos Pending']],
+                textposition='inside', textfont=dict(color='white', size=13, family='Arial Black'), insidetextanchor='middle',
+                hovertemplate='<b>%{x}</b><br>AI Videos Pending: %{y}<extra></extra>'))
+            lpf.add_trace(go.Bar(x=lp['Course Level'], y=lp['Podcasts Pending'], name='Podcasts', marker_color='#0ea5e9',
+                text=[str(int(v)) if v >= lp_thresh else '' for v in lp['Podcasts Pending']],
+                textposition='inside', textfont=dict(color='white', size=13, family='Arial Black'), insidetextanchor='middle',
+                hovertemplate='<b>%{x}</b><br>Podcasts Pending: %{y}<extra></extra>'))
+            lpf.add_trace(go.Bar(x=lp['Course Level'], y=lp['Guides Pending'], name='Study Guides', marker_color='#10b981',
+                text=[str(int(v)) if v >= lp_thresh else '' for v in lp['Guides Pending']],
+                textposition='inside', textfont=dict(color='white', size=13, family='Arial Black'), insidetextanchor='middle',
+                hovertemplate='<b>%{x}</b><br>Study Guides Pending: %{y}<extra></extra>'))
+            
+            # Total annotations above each stacked bar
+            for _, row in lp.iterrows():
+                lpf.add_annotation(x=row['Course Level'], y=row['Total'],
+                    text=str(int(row['Total'])), showarrow=False, yanchor='bottom', yshift=5,
+                    font=dict(color='white', size=13, family='Arial Black'))
+            
             lpf.update_traces(cliponaxis=False)
-            lpf.update_layout(barmode='stack', yaxis=dict(title=dict(text="Pending Items", font=AXIS_TITLE_FONT), tickfont=AXIS_TICK_FONT, gridcolor=GRID_COLOR),
-                xaxis=dict(tickfont=dict(color='#e2e8f0', size=12), automargin=True), height=420, margin=dict(t=10, b=20, l=20, r=20),
+            lpf.update_layout(barmode='stack',
+                yaxis=dict(title=dict(text="Pending Items", font=AXIS_TITLE_FONT), tickfont=AXIS_TICK_FONT, gridcolor=GRID_COLOR,
+                    range=[0, lp['Total'].max() * 1.15]),
+                xaxis=dict(tickfont=dict(color='#e2e8f0', size=12), automargin=True), height=420, margin=dict(t=30, b=20, l=20, r=20),
                 paper_bgcolor=CHART_BG, plot_bgcolor=CHART_BG, legend=dict(orientation="h", yanchor="bottom", y=1.02, font=LEGEND_FONT, bgcolor=CHART_BG))
-            st.plotly_chart(lpf, use_container_width=True)
+            st.plotly_chart(lpf, use_container_width=True, config=PLOTLY_CONFIG)
             
             heaviest_lvl = lp.sort_values('Total', ascending=False).iloc[0]
             st.markdown(f'<div class="warning-card" style="max-width: 100%;"><strong>📦 Largest Backlog:</strong> <strong>{heaviest_lvl["Course Level"]}</strong> holds the largest volume of incomplete work ({int(heaviest_lvl["Total"])} items).</div>', unsafe_allow_html=True)
@@ -676,6 +736,10 @@ with tab_subjects:
         st.dataframe(ldf[['Course Level', 'Number of Courses', 'Total Units', 'Content Completed', 'Avg Completion %']],
             column_config={"Avg Completion %": st.column_config.ProgressColumn("Avg Progress", format="%.1f%%", min_value=0, max_value=100)}, hide_index=True, use_container_width=True)
 
+
+# ═══════════════════════════════════════════════════════════════════
+#  TAB 4 — QUICK WINS
+# ═══════════════════════════════════════════════════════════════════
 with tab_quickwins:
     st.markdown("## Quick Wins: Courses Close to Completion")
     st.markdown("*Low effort, high impact — finish these AI Videos, Podcasts, and Study Guides first!*")
@@ -694,18 +758,41 @@ with tab_quickwins:
         lc, rc = st.columns(2)
         with lc:
             st.markdown("#### What Each Quick Win Course Still Needs")
-            st.markdown("*Short bars = easiest to finish first*")
+            st.markdown("*Short bars = easiest to finish first. Hover for details.*")
             qd = qw.head(12).sort_values('Still Pending', ascending=True).copy()
-            qd['Wrapped Name'] = qd['Course Name'].apply(lambda x: '<br>'.join(textwrap.wrap(str(x), width=35)))
+            qd['Wrapped Name'] = qd['Course Name'].apply(lambda x: '<br>'.join(textwrap.wrap(str(x), width=40)))
+            
+            # Smart text threshold
+            qd_max = qd['Still Pending'].max() if len(qd) > 0 else 1
+            qd_thresh = max(qd_max * 0.10, 1.5)
+            
             qb = go.Figure()
-            qb.add_trace(go.Bar(y=qd['Wrapped Name'], x=qd['Videos Pending'], name='AI Videos Needed', marker_color='#f59e0b', orientation='h', text=qd['Videos Pending'], textposition='inside', textfont=dict(color='white', size=13)))
-            qb.add_trace(go.Bar(y=qd['Wrapped Name'], x=qd['Podcasts Pending'], name='Podcasts Needed', marker_color='#0ea5e9', orientation='h', text=qd['Podcasts Pending'], textposition='inside', textfont=dict(color='white', size=13)))
-            qb.add_trace(go.Bar(y=qd['Wrapped Name'], x=qd['Guides Pending'], name='Study Guides Needed', marker_color='#10b981', orientation='h', text=qd['Guides Pending'], textposition='inside', textfont=dict(color='white', size=13)))
+            qb.add_trace(go.Bar(y=qd['Wrapped Name'], x=qd['Videos Pending'], name='AI Videos Needed', marker_color='#f59e0b', orientation='h',
+                text=[str(int(v)) if v >= qd_thresh else '' for v in qd['Videos Pending']],
+                textposition='inside', textfont=dict(color='white', size=12, family='Arial Black'), insidetextanchor='middle',
+                hovertemplate='AI Videos Needed: %{x}<extra></extra>'))
+            qb.add_trace(go.Bar(y=qd['Wrapped Name'], x=qd['Podcasts Pending'], name='Podcasts Needed', marker_color='#0ea5e9', orientation='h',
+                text=[str(int(v)) if v >= qd_thresh else '' for v in qd['Podcasts Pending']],
+                textposition='inside', textfont=dict(color='white', size=12, family='Arial Black'), insidetextanchor='middle',
+                hovertemplate='Podcasts Needed: %{x}<extra></extra>'))
+            qb.add_trace(go.Bar(y=qd['Wrapped Name'], x=qd['Guides Pending'], name='Study Guides Needed', marker_color='#10b981', orientation='h',
+                text=[str(int(v)) if v >= qd_thresh else '' for v in qd['Guides Pending']],
+                textposition='inside', textfont=dict(color='white', size=12, family='Arial Black'), insidetextanchor='middle',
+                hovertemplate='Study Guides Needed: %{x}<extra></extra>'))
+            
+            # Total annotations
+            for _, row in qd.iterrows():
+                qb.add_annotation(x=row['Still Pending'], y=row['Wrapped Name'],
+                    text=f"  {int(row['Still Pending'])}", showarrow=False, xanchor='left',
+                    font=dict(color='#94a3b8', size=11))
+            
             qb.update_traces(cliponaxis=False)
-            qb.update_layout(barmode='stack', bargap=0.3, xaxis=dict(title=dict(text="Items Still Needed", font=AXIS_TITLE_FONT), tickfont=AXIS_TICK_FONT, gridcolor=GRID_COLOR, range=[0, qd['Still Pending'].max() * 1.3]),
-                yaxis=dict(title="", tickfont=dict(color='#e2e8f0', size=14), automargin=True), height=max(600, len(qd)*80), margin=dict(t=10, b=20, l=300, r=60),
+            qb.update_layout(barmode='stack', bargap=0.25,
+                xaxis=dict(title=dict(text="Items Still Needed", font=AXIS_TITLE_FONT), tickfont=AXIS_TICK_FONT, gridcolor=GRID_COLOR, range=[0, qd['Still Pending'].max() * 1.35]),
+                yaxis=dict(title="", tickfont=dict(color='#e2e8f0', size=11), automargin=True),
+                height=500, margin=dict(t=10, b=20, l=10, r=50),
                 paper_bgcolor=CHART_BG, plot_bgcolor=CHART_BG, legend=dict(orientation="h", yanchor="bottom", y=1.02, font=LEGEND_FONT, bgcolor=CHART_BG))
-            st.plotly_chart(qb, use_container_width=True)
+            st.plotly_chart(qb, use_container_width=True, config=PLOTLY_CONFIG)
             
             easiest_win = qw[qw['Still Pending'] == qw['Still Pending'].min()].iloc[0]
             st.markdown(f'<div class="insight-card" style="max-width: 100%;"><strong>💡 Easiest Win:</strong> "<strong>{easiest_win["Course Name"]}</strong>" needs only <strong>{int(easiest_win["Still Pending"])} items</strong> to hit 100%.</div>', unsafe_allow_html=True)
@@ -714,15 +801,16 @@ with tab_quickwins:
             st.markdown("#### Current Completion of Quick Win Courses")
             st.markdown("*All 75%+ done — just a final push needed*")
             qc = qw.head(12).sort_values('Completion %', ascending=True).copy()
-            qc['Wrapped Name'] = qc['Course Name'].apply(lambda x: '<br>'.join(textwrap.wrap(str(x), width=35)))
+            qc['Wrapped Name'] = qc['Course Name'].apply(lambda x: '<br>'.join(textwrap.wrap(str(x), width=40)))
             qcf = go.Figure(go.Bar(y=qc['Wrapped Name'], x=qc['Completion %'].round(1), orientation='h', marker=dict(color='#10b981'),
-                text=qc['Completion %'].round(1).astype(str)+'%', textposition='outside', textfont=dict(color='white', size=14)))
+                text=qc['Completion %'].round(1).astype(str)+'%', textposition='outside', textfont=dict(color='white', size=13)))
             qcf.add_vline(x=100, line_dash="dash", line_color="#ffffff", annotation_text="100%", annotation_font=dict(color='white', size=13))
             qcf.update_traces(cliponaxis=False)
-            qcf.update_layout(bargap=0.3, xaxis=dict(range=[0, 125], title=dict(text="Completion %", font=AXIS_TITLE_FONT), tickfont=AXIS_TICK_FONT, gridcolor=GRID_COLOR),
-                yaxis=dict(title="", tickfont=dict(color='#e2e8f0', size=14), automargin=True), height=max(600, len(qc)*80), margin=dict(t=10, b=20, l=300, r=60),
+            qcf.update_layout(bargap=0.25, xaxis=dict(range=[0, 125], title=dict(text="Completion %", font=AXIS_TITLE_FONT), tickfont=AXIS_TICK_FONT, gridcolor=GRID_COLOR),
+                yaxis=dict(title="", tickfont=dict(color='#e2e8f0', size=11), automargin=True),
+                height=500, margin=dict(t=10, b=20, l=10, r=60),
                 paper_bgcolor=CHART_BG, plot_bgcolor=CHART_BG)
-            st.plotly_chart(qcf, use_container_width=True)
+            st.plotly_chart(qcf, use_container_width=True, config=PLOTLY_CONFIG)
             
             st.markdown(f'<div class="success-card" style="max-width: 100%;"><strong>🎯 Volume Check:</strong> Completing just <strong>{int(total_quick_win_pending)} remaining items</strong> will add {len(qw)} fully finished courses to the portfolio.</div>', unsafe_allow_html=True)
             
@@ -735,6 +823,10 @@ with tab_quickwins:
     else:
         st.info("No courses are currently in the 75-99% range.")
 
+
+# ═══════════════════════════════════════════════════════════════════
+#  TAB 5 — PRIORITY WATCH
+# ═══════════════════════════════════════════════════════════════════
 with tab_priority:
     st.markdown("## Priority Watchlist")
     st.markdown("*Large courses falling behind — need immediate attention for AI Videos, Podcasts, and Study Guides*")
@@ -759,18 +851,41 @@ with tab_priority:
             lc, rc = st.columns(2)
             with lc:
                 st.markdown("#### What Each At-Risk Course Still Needs")
-                st.markdown("*Longer bars = more AI Videos, Podcasts, Study Guides remaining*")
+                st.markdown("*Longer bars = more remaining. Hover for details.*")
                 pd2 = top_10_pc.sort_values('Still Pending', ascending=True).copy()
-                pd2['Wrapped Name'] = pd2['Course Name'].apply(lambda x: '<br>'.join(textwrap.wrap(str(x), width=35)))
+                pd2['Wrapped Name'] = pd2['Course Name'].apply(lambda x: '<br>'.join(textwrap.wrap(str(x), width=40)))
+                
+                # Smart text threshold
+                pd2_max = pd2['Still Pending'].max() if len(pd2) > 0 else 1
+                pd2_thresh = max(pd2_max * 0.08, 1.5)
+                
                 pb = go.Figure()
-                pb.add_trace(go.Bar(y=pd2['Wrapped Name'], x=pd2['Videos Pending'], name='AI Videos', marker_color='#f59e0b', orientation='h', text=pd2['Videos Pending'], textposition='inside', textfont=dict(color='white', size=13)))
-                pb.add_trace(go.Bar(y=pd2['Wrapped Name'], x=pd2['Podcasts Pending'], name='Podcasts', marker_color='#0ea5e9', orientation='h', text=pd2['Podcasts Pending'], textposition='inside', textfont=dict(color='white', size=13)))
-                pb.add_trace(go.Bar(y=pd2['Wrapped Name'], x=pd2['Guides Pending'], name='Study Guides', marker_color='#10b981', orientation='h', text=pd2['Guides Pending'], textposition='inside', textfont=dict(color='white', size=13)))
+                pb.add_trace(go.Bar(y=pd2['Wrapped Name'], x=pd2['Videos Pending'], name='AI Videos', marker_color='#f59e0b', orientation='h',
+                    text=[str(int(v)) if v >= pd2_thresh else '' for v in pd2['Videos Pending']],
+                    textposition='inside', textfont=dict(color='white', size=12, family='Arial Black'), insidetextanchor='middle',
+                    hovertemplate='AI Videos Pending: %{x}<extra></extra>'))
+                pb.add_trace(go.Bar(y=pd2['Wrapped Name'], x=pd2['Podcasts Pending'], name='Podcasts', marker_color='#0ea5e9', orientation='h',
+                    text=[str(int(v)) if v >= pd2_thresh else '' for v in pd2['Podcasts Pending']],
+                    textposition='inside', textfont=dict(color='white', size=12, family='Arial Black'), insidetextanchor='middle',
+                    hovertemplate='Podcasts Pending: %{x}<extra></extra>'))
+                pb.add_trace(go.Bar(y=pd2['Wrapped Name'], x=pd2['Guides Pending'], name='Study Guides', marker_color='#10b981', orientation='h',
+                    text=[str(int(v)) if v >= pd2_thresh else '' for v in pd2['Guides Pending']],
+                    textposition='inside', textfont=dict(color='white', size=12, family='Arial Black'), insidetextanchor='middle',
+                    hovertemplate='Study Guides Pending: %{x}<extra></extra>'))
+                
+                # Total annotations
+                for _, row in pd2.iterrows():
+                    pb.add_annotation(x=row['Still Pending'], y=row['Wrapped Name'],
+                        text=f"  {int(row['Still Pending'])}", showarrow=False, xanchor='left',
+                        font=dict(color='#94a3b8', size=11))
+                
                 pb.update_traces(cliponaxis=False)
-                pb.update_layout(barmode='stack', bargap=0.3, xaxis=dict(title=dict(text="Items Needed", font=AXIS_TITLE_FONT), tickfont=AXIS_TICK_FONT, gridcolor=GRID_COLOR, range=[0, pd2['Still Pending'].max() * 1.3]),
-                    yaxis=dict(title="", tickfont=dict(color='#e2e8f0', size=14), automargin=True), height=max(600, len(pd2)*80), margin=dict(t=10, b=20, l=350, r=60),
+                pb.update_layout(barmode='stack', bargap=0.25,
+                    xaxis=dict(title=dict(text="Items Needed", font=AXIS_TITLE_FONT), tickfont=AXIS_TICK_FONT, gridcolor=GRID_COLOR, range=[0, pd2['Still Pending'].max() * 1.3]),
+                    yaxis=dict(title="", tickfont=dict(color='#e2e8f0', size=11), automargin=True),
+                    height=500, margin=dict(t=10, b=20, l=10, r=50),
                     paper_bgcolor=CHART_BG, plot_bgcolor=CHART_BG, legend=dict(orientation="h", yanchor="bottom", y=1.02, font=LEGEND_FONT, bgcolor=CHART_BG))
-                st.plotly_chart(pb, use_container_width=True)
+                st.plotly_chart(pb, use_container_width=True, config=PLOTLY_CONFIG)
                 
                 highest_risk = pc.iloc[0]
                 st.markdown(f'<div class="danger-card" style="max-width: 100%;"><strong>⚡ Highest Risk:</strong> "<strong>{highest_risk["Course Name"]}</strong>" needs <strong>{int(highest_risk["Still Pending"])} items</strong>.</div>', unsafe_allow_html=True)
@@ -779,15 +894,16 @@ with tab_priority:
                 st.markdown("#### How Far Behind Are These Top 10 Courses?")
                 st.markdown("*All below 50% — far from the finish line*")
                 pc2 = top_10_pc.sort_values('Completion %', ascending=True).copy()
-                pc2['Wrapped Name'] = pc2['Course Name'].apply(lambda x: '<br>'.join(textwrap.wrap(str(x), width=35)))
+                pc2['Wrapped Name'] = pc2['Course Name'].apply(lambda x: '<br>'.join(textwrap.wrap(str(x), width=40)))
                 pcf = go.Figure(go.Bar(y=pc2['Wrapped Name'], x=pc2['Completion %'].round(1), orientation='h', marker=dict(color='#ef4444'),
-                    text=pc2.apply(lambda r: f"{r['Completion %']:.0f}% ({int(r['Number of Units'])} units)", axis=1), textposition='outside', textfont=dict(color='white', size=13)))
+                    text=pc2.apply(lambda r: f"{r['Completion %']:.0f}% ({int(r['Number of Units'])} units)", axis=1), textposition='outside', textfont=dict(color='white', size=12)))
                 pcf.add_vline(x=50, line_dash="dash", line_color="#f59e0b", annotation_text="50%", annotation_font=dict(color='white', size=13))
                 pcf.update_traces(cliponaxis=False)
-                pcf.update_layout(bargap=0.3, xaxis=dict(range=[0, 125], title=dict(text="Completion %", font=AXIS_TITLE_FONT), tickfont=AXIS_TICK_FONT, gridcolor=GRID_COLOR),
-                    yaxis=dict(title="", tickfont=dict(color='#e2e8f0', size=14), automargin=True), height=max(600, len(pc2)*80), margin=dict(t=10, b=20, l=350, r=120),
+                pcf.update_layout(bargap=0.25, xaxis=dict(range=[0, 125], title=dict(text="Completion %", font=AXIS_TITLE_FONT), tickfont=AXIS_TICK_FONT, gridcolor=GRID_COLOR),
+                    yaxis=dict(title="", tickfont=dict(color='#e2e8f0', size=11), automargin=True),
+                    height=500, margin=dict(t=10, b=20, l=10, r=120),
                     paper_bgcolor=CHART_BG, plot_bgcolor=CHART_BG)
-                st.plotly_chart(pcf, use_container_width=True)
+                st.plotly_chart(pcf, use_container_width=True, config=PLOTLY_CONFIG)
                 
                 st.markdown(f'<div class="warning-card" style="max-width: 100%;"><strong>🚨 Overdue Burden:</strong> These {len(pc)} courses represent <strong>{int(tpp)} pending content pieces</strong> and pose a high risk to delivery timelines.</div>', unsafe_allow_html=True)
 
@@ -799,6 +915,7 @@ with tab_priority:
                 column_config={"Completion %": st.column_config.ProgressColumn("Progress", format="%.1f%%", min_value=0, max_value=100)}, hide_index=True, use_container_width=True)
         else:
             st.success("✅ No large courses are critically behind!")
+
     with pt2:
         st.markdown("<br>", unsafe_allow_html=True)
         if not ns.empty:
@@ -821,7 +938,7 @@ with tab_priority:
                 nsf.update_traces(cliponaxis=False)
                 nsf.update_layout(xaxis=dict(title=dict(text="Items Needed", font=AXIS_TITLE_FONT), tickfont=AXIS_TICK_FONT, gridcolor=GRID_COLOR, range=[0, nbs['Needed'].max()*1.5]),
                     yaxis=dict(title="", tickfont=dict(color='#e2e8f0', size=12), automargin=True), height=450, margin=dict(t=10, b=20, l=10, r=160), paper_bgcolor=CHART_BG, plot_bgcolor=CHART_BG)
-                st.plotly_chart(nsf, use_container_width=True)
+                st.plotly_chart(nsf, use_container_width=True, config=PLOTLY_CONFIG)
                 
                 top_unstarted_sub = nbs.iloc[-1]
                 st.markdown(f'<div class="warning-card" style="max-width: 100%;"><strong>📋 Focus Area:</strong> <strong>{top_unstarted_sub["Subject Area"]}</strong> has {int(top_unstarted_sub["Courses"])} unstarted courses requiring {int(top_unstarted_sub["Needed"])} items.</div>', unsafe_allow_html=True)
@@ -833,14 +950,37 @@ with tab_priority:
                 nbz = ns.groupby('Course Size').agg(Courses=('Course Name', 'count'), Needed=('Total Required', 'sum')).reset_index()
                 nbz['Order'] = nbz['Course Size'].apply(lambda x: sol.index(x) if x in sol else 99)
                 nbz = nbz.sort_values('Order')
+                
+                # Redesigned: clean horizontal bar chart — content needed per size,
+                # with course count shown as annotation (no confusing dual axis)
                 nzf = go.Figure()
-                nzf.add_trace(go.Bar(x=nbz['Course Size'], y=nbz['Courses'], name='Courses', marker_color='#ef4444', text=nbz['Courses'], textposition='outside', textfont=dict(color='white', size=15)))
-                nzf.add_trace(go.Bar(x=nbz['Course Size'], y=nbz['Needed'], name='Content Needed', marker_color='#f59e0b', text=nbz['Needed'], textposition='outside', textfont=dict(color='white', size=15), yaxis='y2'))
-                nzf.update_layout(yaxis=dict(title=dict(text="Courses", font=AXIS_TITLE_FONT), tickfont=AXIS_TICK_FONT, gridcolor=GRID_COLOR),
-                    yaxis2=dict(title=dict(text="Content Needed", font=AXIS_TITLE_FONT), tickfont=AXIS_TICK_FONT, overlaying='y', side='right'),
-                    xaxis=dict(tickfont=dict(color='#e2e8f0', size=12)), barmode='group', height=450, margin=dict(t=10, b=20, l=20, r=60),
-                    paper_bgcolor=CHART_BG, plot_bgcolor=CHART_BG, legend=dict(orientation="h", yanchor="bottom", y=1.02, font=LEGEND_FONT, bgcolor=CHART_BG))
-                st.plotly_chart(nzf, use_container_width=True)
+                nzf.add_trace(go.Bar(
+                    y=nbz['Course Size'], x=nbz['Needed'], orientation='h',
+                    marker_color='#f59e0b',
+                    text=nbz['Needed'].apply(lambda v: f"{int(v)} items"),
+                    textposition='inside', textfont=dict(color='white', size=14, family='Arial Black'),
+                    insidetextanchor='middle',
+                    hovertemplate='<b>%{y}</b><br>Content Needed: %{x}<extra></extra>'
+                ))
+                
+                # Course count annotations at end of each bar
+                for _, row in nbz.iterrows():
+                    nzf.add_annotation(
+                        x=row['Needed'], y=row['Course Size'],
+                        text=f"  {int(row['Courses'])} courses",
+                        showarrow=False, xanchor='left',
+                        font=dict(color='#94a3b8', size=12)
+                    )
+                
+                nzf.update_traces(cliponaxis=False)
+                nzf.update_layout(
+                    xaxis=dict(title=dict(text="Content Items Needed", font=AXIS_TITLE_FONT), tickfont=AXIS_TICK_FONT, gridcolor=GRID_COLOR,
+                        range=[0, nbz['Needed'].max() * 1.35]),
+                    yaxis=dict(title="", tickfont=dict(color='#e2e8f0', size=12), automargin=True, categoryorder='array', categoryarray=list(nbz['Course Size'])),
+                    height=350, margin=dict(t=10, b=20, l=10, r=100),
+                    paper_bgcolor=CHART_BG, plot_bgcolor=CHART_BG, showlegend=False
+                )
+                st.plotly_chart(nzf, use_container_width=True, config=PLOTLY_CONFIG)
                 
                 smallest_not_started = ns.nsmallest(3, 'Number of Units')
                 st.markdown(f'<div class="insight-card" style="max-width: 100%;"><strong>🚀 Quick Start:</strong> The 3 smallest unstarted courses need only <strong>{int(smallest_not_started["Total Required"].sum())} items</strong> total. Start there.</div>', unsafe_allow_html=True)
@@ -851,6 +991,10 @@ with tab_priority:
         else:
             st.success("✅ All courses have started!")
 
+
+# ═══════════════════════════════════════════════════════════════════
+#  TAB 6 — ALL COURSES
+# ═══════════════════════════════════════════════════════════════════
 with tab_allcourses:
     st.markdown("## Complete Course List")
     st.markdown("*Filter and explore all courses — see every AI Video, Podcast, and Study Guide status*")
@@ -906,5 +1050,3 @@ st.markdown("""
     Dashboard refreshes data on page load. Click 'Refresh Data' button to get the latest information.
 </div>
 """, unsafe_allow_html=True)
-
-

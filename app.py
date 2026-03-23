@@ -1474,7 +1474,7 @@ with tab_aivideos:
                         s1, s2, s3 = st.columns(3)
                         with s1: st.metric("Total", f"{int(person_total)}")
                         with s2: st.metric("Avg/Day", f"{person_avg:.1f}")
-                        with s3: st.metric("Hit Rate", f"{person_hit_rate:.0f}%")
+                        with s3: st.metric("Target Achived", f"{person_hit_rate:.0f}%")
 
                         # Status card
                         if person_hit_rate >= 80:

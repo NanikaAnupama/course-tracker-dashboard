@@ -1598,8 +1598,8 @@ with tab_aivideos:
             lb['Avg/Day'] = lb['Avg'].round(1)
             lb['Expected'] = DAILY_TARGET * num_active_days
             lb['Shortfall'] = (lb['Expected'] - lb['Total']).clip(lower=0).astype(int)
-            lb['Hit Rate'] = np.where(lb['Active_Days'] > 0,
-                ((lb['Target_Met'] / lb['Active_Days']) * 100).round(0).astype(int).astype(str) + '%', '—')
+            _hr = np.where(lb['Active_Days'] > 0, (lb['Target_Met'] / lb['Active_Days']) * 100, np.nan)
+            lb['Hit Rate'] = pd.Series(_hr, index=lb.index).apply(lambda v: f'{int(round(v))}%' if pd.notna(v) else '—')
             st.dataframe(
                 lb[['Rank', 'Person', 'Total', 'Expected', 'Shortfall', 'Avg/Day', 'Best', 'Active_Days', 'Target_Met', 'Hit Rate']].rename(columns={
                     'Total': 'Total Videos', 'Expected': f'Expected ({DAILY_TARGET}×{num_active_days}d)',

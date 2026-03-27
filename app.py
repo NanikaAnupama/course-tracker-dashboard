@@ -301,6 +301,21 @@ PERSON_COLORS = {
 DAILY_TARGET = 50          # per person per day
 TEAM_DAILY_TARGET = 200    # all 4 persons combined per day
 
+# ── Person colours for chapter-wise AI video log tab ──
+LOG_NB_COLORS = {
+    'Yenushka': '#10b981',
+    'Piyumi': '#a78bfa',
+    'Amana': '#0ea5e9',
+    'Fathima': '#f59e0b',
+    'Rukaiya': '#f43f5e',
+}
+LOG_WT_COLORS = {
+    'Anjani': '#f59e0b',
+    'Menuka': '#ec4899',
+}
+# Fallback palette for any new names
+LOG_FALLBACK_COLORS = ['#06b6d4', '#f43f5e', '#84cc16', '#e879f9', '#fb923c', '#22d3ee']
+
 
 # --- ROBUST DATA CLEANING FUNCTION ---
 def clean_and_preprocess(df):
@@ -360,7 +375,7 @@ def load_chapter_video_data(file_bytes):
         xls = pd.ExcelFile(file_content, engine='openpyxl')
         sheet_name = None
         for s in xls.sheet_names:
-            if 'chapter' in s.lower() and 'video' in s.lower():
+            if 'chapter' in s.lower() and 'video' in s.lower() and 'log' not in s.lower():
                 sheet_name = s
                 break
         if sheet_name is None:
@@ -436,6 +451,76 @@ def load_chapter_video_data(file_bytes):
         return None
 
 
+# ── Load chapter-wise AI video LOG sheet (NEW) ──
+def load_video_log_data(file_bytes):
+    """Parse the 'Chapter-wise AI video log' sheet and return two DataFrames:
+       one for NotebookLM creators and one for WebTool processors."""
+    try:
+        if isinstance(file_bytes, bytes):
+            file_content = BytesIO(file_bytes)
+        else:
+            file_content = file_bytes
+
+        xls = pd.ExcelFile(file_content, engine='openpyxl')
+        sheet_name = None
+        for s in xls.sheet_names:
+            if 'chapter' in s.lower() and 'video' in s.lower() and 'log' in s.lower():
+                sheet_name = s
+                break
+        if sheet_name is None:
+            return None, None
+
+        raw = pd.read_excel(xls, sheet_name=sheet_name, header=None)
+        data = raw.iloc[2:].copy()
+
+        # Assign column names based on known structure
+        col_names = ['Date', 'AwardingBody', 'CourseName', 'UnitNo', 'ChapterNo',
+                      'NB_Person', 'URL', 'WT_Person', 'AddedToFolder', 'VimeoLink', 'AddedToCoursePage']
+        # Handle sheets with fewer/more columns gracefully
+        if len(data.columns) >= len(col_names):
+            data = data.iloc[:, :len(col_names)]
+            data.columns = col_names
+        else:
+            for i in range(len(data.columns), len(col_names)):
+                data[col_names[i]] = np.nan
+            data.columns = col_names[:len(data.columns)] + col_names[len(data.columns):]
+
+        data['Date'] = pd.to_datetime(data['Date'], errors='coerce')
+        data = data[data['Date'].notna()].copy()
+        if data.empty:
+            return pd.DataFrame(), pd.DataFrame()
+
+        # Fix wrong year
+        mask_2025 = data['Date'].dt.year == 2025
+        if mask_2025.any():
+            data.loc[mask_2025, 'Date'] = data.loc[mask_2025, 'Date'].apply(lambda d: d.replace(year=2026))
+
+        data['Day'] = data['Date'].dt.day_name().str[:3]
+        data['Date Label'] = data['Date'].dt.strftime('%d %b %Y')
+        data['Short Date'] = data['Date'].dt.strftime('%d %b') + ' (' + data['Day'] + ')'
+
+        # Clean person names
+        data['NB_Person'] = data['NB_Person'].astype(str).str.strip().replace('nan', np.nan)
+        data['WT_Person'] = data['WT_Person'].astype(str).str.strip().replace('nan', np.nan)
+
+        # ── NotebookLM aggregated by person & date ──
+        # A video only counts as complete when the URL column is present
+        nb_data = data[(data['NB_Person'].notna()) & (data['URL'].notna()) & (data['URL'].astype(str).str.strip() != '') & (data['URL'].astype(str).str.strip().str.lower() != 'nan')].copy()
+        nb_daily = nb_data.groupby(['Date', 'Date Label', 'Day', 'Short Date', 'NB_Person']).size().reset_index(name='Videos')
+        nb_daily.rename(columns={'NB_Person': 'Person'}, inplace=True)
+
+        # ── WebTool aggregated by person & date ──
+        # A video only counts as complete when AddedToFolder says 'yes'
+        wt_data = data[(data['WT_Person'].notna()) & (data['AddedToFolder'].astype(str).str.strip().str.lower() == 'yes')].copy()
+        wt_daily = wt_data.groupby(['Date', 'Date Label', 'Day', 'Short Date', 'WT_Person']).size().reset_index(name='Videos')
+        wt_daily.rename(columns={'WT_Person': 'Person'}, inplace=True)
+
+        return nb_daily, wt_daily
+    except Exception as e:
+        st.error(f"Error loading video log data: {str(e)}")
+        return None, None
+
+
 def engineer_features(df):
     df['Videos Completed'] = df['Number of AI Videos']
     df['Podcasts Completed'] = df['Number of Podcasts']
@@ -486,6 +571,13 @@ def engineer_features(df):
     return df
 
 
+# ── Helper: get colour for a person from a colour map with fallback ──
+def _get_color(person, color_map, idx=0):
+    if person in color_map:
+        return color_map[person]
+    return LOG_FALLBACK_COLORS[idx % len(LOG_FALLBACK_COLORS)]
+
+
 # --- MAIN APP ---
 st.title("📊 Course Content Production Dashboard")
 with st.expander("📖 How to Read This Dashboard"):
@@ -504,14 +596,17 @@ with st.expander("📖 How to Read This Dashboard"):
 
 sharepoint_url = "https://globaledulinkuk-my.sharepoint.com/:x:/g/personal/sadeev_imperiallearning_co_uk/IQCgqczvPccERK5x-3fcBFPdAUsHzB0rMIahy7kRMz39xtU?download=1"
 
-# ── Download the file ONCE — both parsers share the same bytes ──
+# ── Download the file ONCE — all parsers share the same bytes ──
 file_bytes = download_excel_bytes(sharepoint_url)
 df = None
 vdf = None
+nb_log = None
+wt_log = None
 
 if file_bytes is not None:
     df = load_data(file_bytes)
     vdf = load_chapter_video_data(file_bytes)
+    nb_log, wt_log = load_video_log_data(file_bytes)
 
 if df is None:
     st.warning("⚠️ Automatic Update Failed. Company security may be blocking the direct link.")
@@ -521,6 +616,7 @@ if df is None:
         upload_bytes = uploaded_file.read()
         df = load_data(upload_bytes)
         vdf = load_chapter_video_data(upload_bytes)
+        nb_log, wt_log = load_video_log_data(upload_bytes)
     else:
         st.stop()
 
@@ -549,9 +645,10 @@ if st.button("🔄 Refresh Data"):
     st.rerun()
 st.markdown("---")
 
-tab_overview, tab_content, tab_subjects, tab_quickwins, tab_priority, tab_aivideos, tab_allcourses = st.tabs([
+tab_overview, tab_content, tab_subjects, tab_quickwins, tab_priority, tab_aivideos, tab_videolog, tab_allcourses = st.tabs([
     "📈 Overview", "🎯 Content Analysis", "📚 Subject & Level",
-    "✅ Quick Wins", "⚠️ Priority Watch", "🎬 Daily Chapter-wise AI Video Progress", "📋 All Courses"
+    "✅ Quick Wins", "⚠️ Priority Watch", "🎬 Daily Chapter-wise AI Video Progress",
+    "📹 Chapter-wise AI Video Progress", "📋 All Courses"
 ])
 
 # ═══════════════════════════════════════════════════════════════════
@@ -743,7 +840,6 @@ with tab_subjects:
             sp['Total'] = sp['Videos Pending'] + sp['Podcasts Pending'] + sp['Guides Pending']
             sp = sp[sp['Subject Area'].isin(sdf['Subject Area'])].sort_values('Total', ascending=True)
             
-            # Smart text: only show numbers inside segments that are wide enough to read
             sp_max = sp['Total'].max() if len(sp) > 0 else 1
             sp_thresh = sp_max * 0.07
             
@@ -761,7 +857,6 @@ with tab_subjects:
                 textposition='inside', textfont=dict(color='white', size=13, family='Arial Black'), insidetextanchor='middle',
                 hovertemplate='<b>%{y}</b><br>Study Guides Pending: %{x}<extra></extra>'))
             
-            # Total annotations at end of each bar
             for _, row in sp.iterrows():
                 pf.add_annotation(x=row['Total'], y=row['Subject Area'],
                     text=f"  {int(row['Total'])}", showarrow=False, xanchor='left',
@@ -814,7 +909,6 @@ with tab_subjects:
             lp = lp.sort_values('Order')
             lp['Total'] = lp['Videos Pending'] + lp['Podcasts Pending'] + lp['Guides Pending']
             
-            # Smart text: only show numbers in segments tall enough to read
             lp_max = lp['Total'].max() if len(lp) > 0 else 1
             lp_thresh = lp_max * 0.07
             
@@ -832,7 +926,6 @@ with tab_subjects:
                 textposition='inside', textfont=dict(color='white', size=13, family='Arial Black'), insidetextanchor='middle',
                 hovertemplate='<b>%{x}</b><br>Study Guides Pending: %{y}<extra></extra>'))
             
-            # Total annotations above each stacked bar
             for _, row in lp.iterrows():
                 lpf.add_annotation(x=row['Course Level'], y=row['Total'],
                     text=str(int(row['Total'])), showarrow=False, yanchor='bottom', yshift=5,
@@ -881,7 +974,6 @@ with tab_quickwins:
             qd = qw.head(12).sort_values('Still Pending', ascending=True).copy()
             qd['Wrapped Name'] = qd['Course Name'].apply(lambda x: '<br>'.join(textwrap.wrap(str(x), width=40)))
             
-            # Smart text threshold
             qd_max = qd['Still Pending'].max() if len(qd) > 0 else 1
             qd_thresh = max(qd_max * 0.10, 1.5)
             
@@ -899,7 +991,6 @@ with tab_quickwins:
                 textposition='inside', textfont=dict(color='white', size=12, family='Arial Black'), insidetextanchor='middle',
                 hovertemplate='Study Guides Needed: %{x}<extra></extra>'))
             
-            # Total annotations
             for _, row in qd.iterrows():
                 qb.add_annotation(x=row['Still Pending'], y=row['Wrapped Name'],
                     text=f"  {int(row['Still Pending'])}", showarrow=False, xanchor='left',
@@ -974,7 +1065,6 @@ with tab_priority:
                 pd2 = top_10_pc.sort_values('Still Pending', ascending=True).copy()
                 pd2['Wrapped Name'] = pd2['Course Name'].apply(lambda x: '<br>'.join(textwrap.wrap(str(x), width=40)))
                 
-                # Smart text threshold
                 pd2_max = pd2['Still Pending'].max() if len(pd2) > 0 else 1
                 pd2_thresh = max(pd2_max * 0.08, 1.5)
                 
@@ -992,7 +1082,6 @@ with tab_priority:
                     textposition='inside', textfont=dict(color='white', size=12, family='Arial Black'), insidetextanchor='middle',
                     hovertemplate='Study Guides Pending: %{x}<extra></extra>'))
                 
-                # Total annotations
                 for _, row in pd2.iterrows():
                     pb.add_annotation(x=row['Still Pending'], y=row['Wrapped Name'],
                         text=f"  {int(row['Still Pending'])}", showarrow=False, xanchor='left',
@@ -1070,8 +1159,6 @@ with tab_priority:
                 nbz['Order'] = nbz['Course Size'].apply(lambda x: sol.index(x) if x in sol else 99)
                 nbz = nbz.sort_values('Order')
                 
-                # Redesigned: clean horizontal bar chart — content needed per size,
-                # with course count shown as annotation (no confusing dual axis)
                 nzf = go.Figure()
                 nzf.add_trace(go.Bar(
                     y=nbz['Course Size'], x=nbz['Needed'], orientation='h',
@@ -1082,7 +1169,6 @@ with tab_priority:
                     hovertemplate='<b>%{y}</b><br>Content Needed: %{x}<extra></extra>'
                 ))
                 
-                # Course count annotations at end of each bar
                 for _, row in nbz.iterrows():
                     nzf.add_annotation(
                         x=row['Needed'], y=row['Course Size'],
@@ -1112,14 +1198,13 @@ with tab_priority:
 
 
 # ═══════════════════════════════════════════════════════════════════
-#  TAB 6 — DAILY CHAPTER-WISE AI VIDEO PROGRESS  (NEW)
+#  TAB 6 — DAILY CHAPTER-WISE AI VIDEO PROGRESS  (EXISTING)
 # ═══════════════════════════════════════════════════════════════════
 with tab_aivideos:
     st.markdown("## 🎬 Daily Chapter-wise AI Video Progress")
     st.markdown(f"*Each person must deliver **{DAILY_TARGET} AI videos per day**. Combined team target: **{TEAM_DAILY_TARGET} videos per day** (4 members × {DAILY_TARGET}).*")
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # Attempt to load from uploaded file if SharePoint load failed
     _vdf = vdf
     if _vdf is None or (isinstance(_vdf, pd.DataFrame) and _vdf.empty):
         st.info("👇 Upload the tracker file to view the Chapter-wise AI Video Progress data.")
@@ -1131,11 +1216,8 @@ with tab_aivideos:
         persons = list(_vdf['Person'].unique())
         all_dates = sorted(_vdf['Date'].unique())
         total_days = len(all_dates)
-
-        # Check if there is any actual numeric data
         has_data = _vdf['Videos'].sum() > 0
 
-        # If no data, offer a quick upload to override with a fresh file
         if not has_data:
             st.markdown('<div class="warning-card"><strong>📋 Tracker Ready — No Data Entered Yet</strong><br><br>'
                         f'The schedule is set up for <strong>{len(persons)} team members</strong> across '
@@ -1199,38 +1281,20 @@ with tab_aivideos:
                 st.dataframe(notes_df.rename(columns={'Date Label': 'Date'}), hide_index=True, use_container_width=True)
 
         else:
-            # ═══════════════════════════════════════════════════════
-            #  DATA EXISTS — REDESIGNED ANALYTICS
-            # ═══════════════════════════════════════════════════════
-
-            # ── Filter to only days/rows with actual activity ──
             active_vdf = _vdf[_vdf.groupby('Date')['Videos'].transform('sum') > 0].copy()
             active_dates = sorted(active_vdf['Date'].unique())
             num_active_days = len(active_dates)
-
-            # ── Build short readable date labels (e.g. "25 Mar (Tue)") ──
             active_vdf['Short Date'] = active_vdf['Date'].dt.strftime('%d %b') + ' (' + active_vdf['Day'] + ')'
             date_label_order = active_vdf.drop_duplicates('Date').sort_values('Date')['Short Date'].tolist()
-
-            # ── Precompute daily team totals (ONLY active days) ──
-            daily_team = active_vdf.groupby(['Date', 'Short Date', 'Date Label', 'Day', 'Week']).agg(
-                Total=('Videos', 'sum')
-            ).reset_index().sort_values('Date')
+            daily_team = active_vdf.groupby(['Date', 'Short Date', 'Date Label', 'Day', 'Week']).agg(Total=('Videos', 'sum')).reset_index().sort_values('Date')
             daily_team['Team Met'] = daily_team['Total'] >= TEAM_DAILY_TARGET
             daily_team['Team Shortfall'] = np.where(daily_team['Total'] < TEAM_DAILY_TARGET, TEAM_DAILY_TARGET - daily_team['Total'], 0)
             daily_team['Team Surplus'] = np.where(daily_team['Total'] >= TEAM_DAILY_TARGET, daily_team['Total'] - TEAM_DAILY_TARGET, 0)
-
-            # ── Grand totals ──
             grand_total = _vdf['Videos'].sum()
             team_met_days = daily_team['Team Met'].sum()
             team_hit_pct = (team_met_days / num_active_days * 100) if num_active_days > 0 else 0
-
-            # Per-person totals for metrics row
             person_video_totals = active_vdf.groupby('Person')['Videos'].sum().to_dict()
 
-            # ═══════════════════════════════════════════════════
-            #  KEY METRICS
-            # ═══════════════════════════════════════════════════
             st.markdown("### Key Metrics")
             st.markdown("<br>", unsafe_allow_html=True)
             total_expected_so_far = TEAM_DAILY_TARGET * num_active_days
@@ -1258,9 +1322,6 @@ with tab_aivideos:
             st.markdown("---")
             st.markdown("<br>", unsafe_allow_html=True)
 
-            # ═══════════════════════════════════════════════════
-            #  SECTION A — COMBINED TEAM (200/day)
-            # ═══════════════════════════════════════════════════
             st.markdown(f"### 📊 Combined Team Daily Target — {TEAM_DAILY_TARGET} Videos per Day")
             st.markdown(f"*All 4 members combined must produce **{TEAM_DAILY_TARGET} videos every working day**. Green bars hit the target, red bars fall short.*")
             st.markdown("<br>", unsafe_allow_html=True)
@@ -1272,7 +1333,6 @@ with tab_aivideos:
             with t4: st.metric("Cumulative Shortfall", f"{int(daily_team['Team Shortfall'].sum())}")
             st.markdown("<br>", unsafe_allow_html=True)
 
-            # ── Team daily bar chart — categorical x-axis ──
             bar_colors = ['#10b981' if v >= TEAM_DAILY_TARGET else '#ef4444' for v in daily_team['Total']]
             team_bar = go.Figure()
             team_bar.add_hline(y=TEAM_DAILY_TARGET, line_dash="dash", line_color="rgba(255,255,255,0.5)",
@@ -1316,7 +1376,6 @@ with tab_aivideos:
 
             st.markdown("<br>", unsafe_allow_html=True)
 
-            # ── Who contributed what each day — grouped bar ──
             st.markdown("#### Daily Contribution Breakdown by Person")
             st.markdown(f"*How each team member contributed to the daily {TEAM_DAILY_TARGET}-video target*")
             st.markdown("<br>", unsafe_allow_html=True)
@@ -1353,7 +1412,6 @@ with tab_aivideos:
             )
             st.plotly_chart(stacked_fig, use_container_width=True, config=PLOTLY_CONFIG)
 
-            # ── Cumulative progress — categorical x-axis ──
             st.markdown("<br>", unsafe_allow_html=True)
             st.markdown("#### Cumulative Team Progress vs Expected")
             st.markdown(f"*Running total of videos produced compared to the expected pace ({TEAM_DAILY_TARGET} per day)*")
@@ -1411,14 +1469,10 @@ with tab_aivideos:
             st.markdown("---")
             st.markdown("<br>", unsafe_allow_html=True)
 
-            # ═══════════════════════════════════════════════════
-            #  SECTION B — INDIVIDUAL PERFORMANCE (50/day each)
-            # ═══════════════════════════════════════════════════
             st.markdown(f"### 👤 Individual Daily Performance — {DAILY_TARGET} Videos per Person per Day")
             st.markdown(f"*Each of the 4 team members is responsible for **{DAILY_TARGET} AI videos every working day**. The dashed line marks this individual target.*")
             st.markdown("<br>", unsafe_allow_html=True)
 
-            # ── Two persons per row for better side-by-side comparison ──
             for row_start in range(0, len(persons), 2):
                 row_persons = persons[row_start:row_start+2]
                 cols = st.columns(len(row_persons))
@@ -1436,7 +1490,6 @@ with tab_aivideos:
                         person_hit_rate = (person_target_days / person_data_days * 100) if person_data_days > 0 else 0
                         person_shortfall = max(0, person_expected - person_total)
 
-                        # ── Bar chart per person — clear, readable ──
                         bar_clrs = [color if v >= DAILY_TARGET else '#ef4444' for v in pdf['Videos']]
                         fig = go.Figure()
                         fig.add_hline(y=DAILY_TARGET, line_dash="dash", line_color="rgba(255,255,255,0.35)",
@@ -1474,13 +1527,11 @@ with tab_aivideos:
                         )
                         st.plotly_chart(fig, use_container_width=True, config=PLOTLY_CONFIG)
 
-                        # Mini stats
                         s1, s2, s3 = st.columns(3)
                         with s1: st.metric("Total", f"{int(person_total)}")
                         with s2: st.metric("Avg/Day", f"{person_avg:.1f}")
                         with s3: st.metric("Target Achived", f"{person_hit_rate:.0f}%")
 
-                        # Status card
                         if person_hit_rate >= 80:
                             st.markdown(f'<div class="success-card"><strong>✅ On Track</strong> — met {DAILY_TARGET}/day target on <strong>{person_target_days} of {person_data_days}</strong> days. Total: <strong>{int(person_total)}</strong> of {person_expected} expected.</div>', unsafe_allow_html=True)
                         elif person_hit_rate >= 50:
@@ -1495,9 +1546,6 @@ with tab_aivideos:
             st.markdown("---")
             st.markdown("<br>", unsafe_allow_html=True)
 
-            # ═══════════════════════════════════════════════════
-            #  SECTION C — WEEKLY & COMPARISON
-            # ═══════════════════════════════════════════════════
             st.markdown("### 📅 Weekly Performance Summary")
             st.markdown("*Aggregated weekly view — compare performance across weeks*")
             st.markdown("<br>", unsafe_allow_html=True)
@@ -1590,7 +1638,6 @@ with tab_aivideos:
 
             st.markdown("<br>", unsafe_allow_html=True)
 
-            # ── Leaderboard ──
             st.markdown("### 🏆 Team Leaderboard")
             st.markdown("<br>", unsafe_allow_html=True)
             lb = person_totals.sort_values('Total', ascending=False).copy()
@@ -1609,7 +1656,6 @@ with tab_aivideos:
                 hide_index=True, use_container_width=True
             )
 
-            # Notes
             notes_df = _vdf[_vdf['Note'] != ''][['Date Label', 'Person', 'Note']].drop_duplicates()
             if not notes_df.empty:
                 st.markdown("<br>", unsafe_allow_html=True)
@@ -1618,7 +1664,6 @@ with tab_aivideos:
                 st.markdown("<br>", unsafe_allow_html=True)
                 st.dataframe(notes_df.rename(columns={'Date Label': 'Date'}), hide_index=True, use_container_width=True)
 
-            # ── Full daily log ──
             st.markdown("<br>", unsafe_allow_html=True)
             st.markdown("### 📋 Full Daily Log")
             st.markdown(f"*Individual target: {DAILY_TARGET}/person — Team target: {TEAM_DAILY_TARGET}/day combined*")
@@ -1640,7 +1685,443 @@ with tab_aivideos:
 
 
 # ═══════════════════════════════════════════════════════════════════
-#  TAB 7 — ALL COURSES
+#  TAB 7 — CHAPTER-WISE AI VIDEO PROGRESS  (NEW — from log sheet)
+# ═══════════════════════════════════════════════════════════════════
+with tab_videolog:
+    st.markdown("## 📹 Chapter-wise AI Video Progress")
+    st.markdown("*Detailed video-level production log — track who produced each video using NotebookLM and who produced it using WebTool*")
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # ── If SharePoint load didn't get the log, allow upload ──
+    _nb = nb_log
+    _wt = wt_log
+    if (_nb is None or (isinstance(_nb, pd.DataFrame) and _nb.empty)) and (_wt is None or (isinstance(_wt, pd.DataFrame) and _wt.empty)):
+        st.info("👇 Upload the tracker file to view the Chapter-wise AI Video Log data.")
+        log_upload = st.file_uploader("Upload 'Additional Material Tracker Sheet.xlsx' (for Video Log tab)", type=['xlsx'], key='log_upload')
+        if log_upload is not None:
+            _nb, _wt = load_video_log_data(log_upload.read())
+
+    has_nb = _nb is not None and isinstance(_nb, pd.DataFrame) and not _nb.empty
+    has_wt = _wt is not None and isinstance(_wt, pd.DataFrame) and not _wt.empty
+
+    if not has_nb and not has_wt:
+        st.markdown('<div class="warning-card"><strong>⚠️ No Chapter-wise AI Video Log Data Available</strong><br><br>'
+                    'The "Chapter-wise AI video log" sheet could not be found or is empty. Please upload the tracker file above.</div>', unsafe_allow_html=True)
+    else:
+        # ── Sub-tabs ──
+        sub_nb, sub_wt = st.tabs(["🔬 Using NotebookLM", "🌐 Using WebTool"])
+
+        # ─────────────────────────────────────────────────────
+        #  SUB-TAB A: NotebookLM
+        # ─────────────────────────────────────────────────────
+        with sub_nb:
+            st.markdown("<br>", unsafe_allow_html=True)
+            if not has_nb:
+                st.info("No NotebookLM data available yet.")
+            else:
+                nb_persons = sorted(_nb['Person'].unique())
+                nb_dates = sorted(_nb['Date'].unique())
+                nb_num_days = len(nb_dates)
+                nb_date_order = _nb.drop_duplicates('Date').sort_values('Date')['Short Date'].tolist()
+
+                # ── Key Metrics ──
+                st.markdown("### Key Metrics")
+                st.markdown("<br>", unsafe_allow_html=True)
+                nb_total = int(_nb['Videos'].sum())
+                m1, m2 = st.columns(2)
+                with m1: st.metric("Total Videos Created", f"{nb_total}")
+                with m2: st.metric("Active Days", f"{nb_num_days}")
+                st.markdown("<br>", unsafe_allow_html=True)
+
+                # Person cards
+                pcols = st.columns(4)
+                nb_all_persons = ['Amana', 'Piyumi', 'Yenushka', 'Rukaiya']
+                for i, person in enumerate(nb_all_persons):
+                    with pcols[i]:
+                        color = _get_color(person, LOG_NB_COLORS, i)
+                        pv = int(_nb[_nb['Person'] == person]['Videos'].sum()) if person in nb_persons else 0
+                        st.markdown(
+                            f'<div style="background:rgba(30,41,59,0.7);border-radius:10px;padding:18px 20px;'
+                            f'border:1px solid rgba(255,255,255,0.1);border-left:4px solid {color};'
+                            f'box-shadow:0 4px 15px rgba(0,0,0,0.2);">'
+                            f'<div style="color:#94a3b8;font-size:12px;font-weight:500;text-transform:uppercase;letter-spacing:0.5px;">{person} Total Videos</div>'
+                            f'<div style="color:{color};font-size:28px;font-weight:700;margin-top:4px;">{pv}</div>'
+                            f'</div>',
+                            unsafe_allow_html=True
+                        )
+
+                st.markdown("<br>", unsafe_allow_html=True)
+                st.markdown("---")
+                st.markdown("<br>", unsafe_allow_html=True)
+
+                # ── Chart 1: Daily production stacked bar ──
+                st.markdown("### 📊 Daily Video Production by Person")
+                st.markdown("*Each bar shows total videos produced per day, broken down by contributor*")
+                st.markdown("<br>", unsafe_allow_html=True)
+
+                nb_stacked = go.Figure()
+                for i, person in enumerate(nb_persons):
+                    pdata = _nb[_nb['Person'] == person].sort_values('Date')
+                    color = _get_color(person, LOG_NB_COLORS, i)
+                    nb_stacked.add_trace(go.Bar(
+                        x=pdata['Short Date'], y=pdata['Videos'], name=person, marker_color=color,
+                        text=pdata['Videos'].apply(lambda v: str(int(v)) if v > 0 else ''),
+                        textposition='inside', textfont=dict(color='white', size=13, family='Arial Black'),
+                        hovertemplate=(
+                            f"<b>{person}</b><br>"
+                            "Date: %{x}<br>"
+                            "Videos produced: %{y}"
+                            "<extra></extra>"
+                        )
+                    ))
+                # Team total annotations above bars
+                nb_team_daily = _nb.groupby(['Date', 'Short Date'])['Videos'].sum().reset_index().sort_values('Date')
+                for _, row in nb_team_daily.iterrows():
+                    nb_stacked.add_annotation(x=row['Short Date'], y=row['Videos'], text=str(int(row['Videos'])),
+                        showarrow=False, yanchor='bottom', yshift=5, font=dict(color='white', size=14, family='Arial Black'))
+                nb_stacked.update_traces(cliponaxis=False)
+                nb_stacked.update_layout(
+                    barmode='stack',
+                    xaxis=dict(title="", tickfont=dict(color='#e2e8f0', size=12), categoryorder='array', categoryarray=nb_date_order, tickangle=-30),
+                    yaxis=dict(title=dict(text="Videos Produced", font=AXIS_TITLE_FONT), tickfont=AXIS_TICK_FONT,
+                               gridcolor=GRID_COLOR, rangemode='tozero',
+                               range=[0, nb_team_daily['Videos'].max() * 1.25]),
+                    height=420, margin=dict(t=20, b=80, l=60, r=30),
+                    paper_bgcolor=CHART_BG, plot_bgcolor=CHART_BG,
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, font=LEGEND_FONT, bgcolor=CHART_BG)
+                )
+                st.plotly_chart(nb_stacked, use_container_width=True, config=PLOTLY_CONFIG)
+
+                st.markdown("<br>", unsafe_allow_html=True)
+
+                # ── Chart 2: Day-over-day trend line ──
+                lc, rc = st.columns(2)
+                with lc:
+                    st.markdown("#### Day-over-Day Trend per Person")
+                    st.markdown("*How each person's output changed from one day to the next*")
+                    st.markdown("<br>", unsafe_allow_html=True)
+
+                    nb_trend = go.Figure()
+                    for i, person in enumerate(nb_persons):
+                        pdata = _nb[_nb['Person'] == person].sort_values('Date')
+                        color = _get_color(person, LOG_NB_COLORS, i)
+                        nb_trend.add_trace(go.Scatter(
+                            x=pdata['Short Date'], y=pdata['Videos'], mode='lines+markers',
+                            line=dict(color=color, width=3), marker=dict(size=10, color=color, line=dict(width=2, color='white')),
+                            name=person,
+                            hovertemplate=(
+                                f"<b>{person}</b><br>"
+                                "Date: %{x}<br>"
+                                "Videos: %{y}"
+                                "<extra></extra>"
+                            )
+                        ))
+                    nb_trend.update_layout(
+                        xaxis=dict(title="", tickfont=dict(color='#e2e8f0', size=11), categoryorder='array', categoryarray=nb_date_order, tickangle=-30),
+                        yaxis=dict(title=dict(text="Videos", font=AXIS_TITLE_FONT), tickfont=AXIS_TICK_FONT, gridcolor=GRID_COLOR, rangemode='tozero'),
+                        height=380, margin=dict(t=20, b=70, l=50, r=20),
+                        paper_bgcolor=CHART_BG, plot_bgcolor=CHART_BG,
+                        legend=dict(orientation="h", yanchor="bottom", y=1.02, font=LEGEND_FONT, bgcolor=CHART_BG)
+                    )
+                    st.plotly_chart(nb_trend, use_container_width=True, config=PLOTLY_CONFIG)
+
+                with rc:
+                    st.markdown("#### Share of Total Contribution")
+                    st.markdown("*Overall split of videos produced by each person*")
+                    st.markdown("<br>", unsafe_allow_html=True)
+
+                    nb_person_totals = _nb.groupby('Person')['Videos'].sum().reset_index().sort_values('Videos', ascending=False)
+                    pie_colors = [_get_color(p, LOG_NB_COLORS, i) for i, p in enumerate(nb_person_totals['Person'])]
+                    nb_pie = px.pie(nb_person_totals, values='Videos', names='Person',
+                                   color_discrete_sequence=pie_colors, hole=0.45)
+                    nb_pie.update_traces(
+                        textposition='inside', textinfo='value+percent',
+                        textfont=dict(size=15, color='white'),
+                        hovertemplate="<b>%{label}</b><br>Videos: %{value}<br>Share: %{percent}<extra></extra>"
+                    )
+                    nb_pie.update_layout(
+                        height=380, margin=dict(t=20, b=20, l=20, r=20),
+                        legend=dict(font=LEGEND_FONT, bgcolor=CHART_BG),
+                        paper_bgcolor=CHART_BG, plot_bgcolor=CHART_BG
+                    )
+                    st.plotly_chart(nb_pie, use_container_width=True, config=PLOTLY_CONFIG)
+
+                st.markdown("<br>", unsafe_allow_html=True)
+
+                # ── Chart 3: Person comparison bar ──
+                st.markdown("#### Person Comparison — Total Videos via NotebookLM")
+                st.markdown("<br>", unsafe_allow_html=True)
+                nb_comp = nb_person_totals.sort_values('Videos', ascending=True)
+                nb_comp_fig = go.Figure()
+                for _, row in nb_comp.iterrows():
+                    color = _get_color(row['Person'], LOG_NB_COLORS)
+                    nb_comp_fig.add_trace(go.Bar(
+                        y=[row['Person']], x=[row['Videos']], orientation='h',
+                        marker_color=color, showlegend=False,
+                        text=[f"{int(row['Videos'])} videos"],
+                        textposition='inside', textfont=LABEL_FONT,
+                        hovertemplate=(
+                            f"<b>{row['Person']}</b><br>"
+                            f"Total videos: {int(row['Videos'])}"
+                            "<extra></extra>"
+                        )
+                    ))
+                nb_comp_fig.update_traces(cliponaxis=False)
+                nb_comp_fig.update_layout(
+                    xaxis=dict(title=dict(text="Total Videos", font=AXIS_TITLE_FONT), tickfont=AXIS_TICK_FONT, gridcolor=GRID_COLOR,
+                               range=[0, nb_comp['Videos'].max() * 1.25]),
+                    yaxis=dict(tickfont=dict(color='#e2e8f0', size=14), automargin=True),
+                    height=250, margin=dict(t=10, b=20, l=10, r=20),
+                    paper_bgcolor=CHART_BG, plot_bgcolor=CHART_BG
+                )
+                st.plotly_chart(nb_comp_fig, use_container_width=True, config=PLOTLY_CONFIG)
+
+                st.markdown("<br>", unsafe_allow_html=True)
+                st.markdown("---")
+                st.markdown("<br>", unsafe_allow_html=True)
+
+                # ── Summary ──
+                st.markdown("### 📋 Summary")
+                st.markdown("<br>", unsafe_allow_html=True)
+                top_nb = nb_person_totals.iloc[0]
+                bottom_nb = nb_person_totals.iloc[-1]
+                best_day_nb = nb_team_daily.loc[nb_team_daily['Videos'].idxmax()]
+                worst_day_nb = nb_team_daily.loc[nb_team_daily['Videos'].idxmin()]
+
+                # Day-over-day change
+                if len(nb_team_daily) >= 2:
+                    last_day_val = nb_team_daily.iloc[-1]['Videos']
+                    prev_day_val = nb_team_daily.iloc[-2]['Videos']
+                    dod_change = last_day_val - prev_day_val
+                    dod_pct = (dod_change / prev_day_val * 100) if prev_day_val > 0 else 0
+                    if dod_change > 0:
+                        dod_text = f"The most recent day saw <strong>{int(last_day_val)} videos</strong>, an increase of <strong>{int(dod_change)} ({dod_pct:+.0f}%)</strong> compared to the previous day."
+                    elif dod_change < 0:
+                        dod_text = f"The most recent day saw <strong>{int(last_day_val)} videos</strong>, a decrease of <strong>{int(abs(dod_change))} ({dod_pct:+.0f}%)</strong> compared to the previous day."
+                    else:
+                        dod_text = f"The most recent day produced <strong>{int(last_day_val)} videos</strong>, unchanged from the previous day."
+                else:
+                    dod_text = f"Only one day of data so far with <strong>{int(nb_team_daily.iloc[0]['Videos'])} videos</strong>."
+
+                st.markdown(
+                    f'<div class="insight-card"><strong>🔬 NotebookLM Video Production Summary</strong><br><br>'
+                    f'Over <strong>{nb_num_days} active days</strong>, the team created a total of <strong>{nb_total} videos</strong> using NotebookLM.<br><br>'
+                    f'<strong>{top_nb["Person"]}</strong> leads with <strong>{int(top_nb["Videos"])} videos</strong>, '
+                    f'while <strong>{bottom_nb["Person"]}</strong> contributed <strong>{int(bottom_nb["Videos"])} videos</strong>.<br><br>'
+                    f'The most productive day was <strong>{best_day_nb["Short Date"]}</strong> with <strong>{int(best_day_nb["Videos"])} videos</strong>. '
+                    f'{dod_text}</div>',
+                    unsafe_allow_html=True
+                )
+
+                # ── Full data table ──
+                st.markdown("<br>", unsafe_allow_html=True)
+                st.markdown("### 📋 Full Daily Log — NotebookLM")
+                st.markdown("<br>", unsafe_allow_html=True)
+                nb_pivot = _nb.pivot_table(index=['Date', 'Date Label', 'Day'], columns='Person', values='Videos', aggfunc='sum', fill_value=0).reset_index()
+                nb_pivot = nb_pivot.sort_values('Date')
+                nb_pivot['Team Total'] = nb_pivot[nb_persons].sum(axis=1)
+                display_nb_cols = ['Date Label', 'Day'] + nb_persons + ['Team Total']
+                st.dataframe(nb_pivot[display_nb_cols].rename(columns={'Date Label': 'Date', 'Day': 'Weekday'}),
+                    hide_index=True, use_container_width=True)
+
+
+        # ─────────────────────────────────────────────────────
+        #  SUB-TAB B: WebTool
+        # ─────────────────────────────────────────────────────
+        with sub_wt:
+            st.markdown("<br>", unsafe_allow_html=True)
+            if not has_wt:
+                st.info("No WebTool data available yet. Videos produced via WebTool will appear here once data is entered.")
+            else:
+                wt_persons = sorted(_wt['Person'].unique())
+                wt_dates = sorted(_wt['Date'].unique())
+                wt_num_days = len(wt_dates)
+                wt_date_order = _wt.drop_duplicates('Date').sort_values('Date')['Short Date'].tolist()
+
+                # ── Key Metrics ──
+                st.markdown("### Key Metrics")
+                st.markdown("<br>", unsafe_allow_html=True)
+                wt_total = int(_wt['Videos'].sum())
+                m1, m2 = st.columns(2)
+                with m1: st.metric("Total Videos Produced", f"{wt_total}")
+                with m2: st.metric("Active Days", f"{wt_num_days}")
+                st.markdown("<br>", unsafe_allow_html=True)
+
+                # Person cards
+                pcols = st.columns(len(wt_persons))
+                for i, person in enumerate(wt_persons):
+                    with pcols[i]:
+                        color = _get_color(person, LOG_WT_COLORS, i)
+                        pv = int(_wt[_wt['Person'] == person]['Videos'].sum())
+                        st.markdown(
+                            f'<div style="background:rgba(30,41,59,0.7);border-radius:10px;padding:18px 20px;'
+                            f'border:1px solid rgba(255,255,255,0.1);border-left:4px solid {color};'
+                            f'box-shadow:0 4px 15px rgba(0,0,0,0.2);">'
+                            f'<div style="color:#94a3b8;font-size:12px;font-weight:500;text-transform:uppercase;letter-spacing:0.5px;">{person} Total Videos</div>'
+                            f'<div style="color:{color};font-size:28px;font-weight:700;margin-top:4px;">{pv}</div>'
+                            f'</div>',
+                            unsafe_allow_html=True
+                        )
+
+                st.markdown("<br>", unsafe_allow_html=True)
+                st.markdown("---")
+                st.markdown("<br>", unsafe_allow_html=True)
+
+                # ── Chart 1: Daily production stacked bar ──
+                st.markdown("### 📊 Daily Video Production by Person")
+                st.markdown("*Each bar shows total videos produced via WebTool per day*")
+                st.markdown("<br>", unsafe_allow_html=True)
+
+                wt_stacked = go.Figure()
+                for i, person in enumerate(wt_persons):
+                    pdata = _wt[_wt['Person'] == person].sort_values('Date')
+                    color = _get_color(person, LOG_WT_COLORS, i)
+                    wt_stacked.add_trace(go.Bar(
+                        x=pdata['Short Date'], y=pdata['Videos'], name=person, marker_color=color,
+                        text=pdata['Videos'].apply(lambda v: str(int(v)) if v > 0 else ''),
+                        textposition='inside', textfont=dict(color='white', size=13, family='Arial Black'),
+                        hovertemplate=(
+                            f"<b>{person}</b><br>"
+                            "Date: %{x}<br>"
+                            "Videos produced: %{y}"
+                            "<extra></extra>"
+                        )
+                    ))
+                wt_team_daily = _wt.groupby(['Date', 'Short Date'])['Videos'].sum().reset_index().sort_values('Date')
+                for _, row in wt_team_daily.iterrows():
+                    wt_stacked.add_annotation(x=row['Short Date'], y=row['Videos'], text=str(int(row['Videos'])),
+                        showarrow=False, yanchor='bottom', yshift=5, font=dict(color='white', size=14, family='Arial Black'))
+                wt_stacked.update_traces(cliponaxis=False)
+                wt_stacked.update_layout(
+                    barmode='stack',
+                    xaxis=dict(title="", tickfont=dict(color='#e2e8f0', size=12), categoryorder='array', categoryarray=wt_date_order, tickangle=-30),
+                    yaxis=dict(title=dict(text="Videos Produced", font=AXIS_TITLE_FONT), tickfont=AXIS_TICK_FONT,
+                               gridcolor=GRID_COLOR, rangemode='tozero',
+                               range=[0, wt_team_daily['Videos'].max() * 1.3]),
+                    height=420, margin=dict(t=20, b=80, l=60, r=30),
+                    paper_bgcolor=CHART_BG, plot_bgcolor=CHART_BG,
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, font=LEGEND_FONT, bgcolor=CHART_BG)
+                )
+                st.plotly_chart(wt_stacked, use_container_width=True, config=PLOTLY_CONFIG)
+
+                st.markdown("<br>", unsafe_allow_html=True)
+
+                # ── Charts: Trend + Pie side by side ──
+                lc, rc = st.columns(2)
+                with lc:
+                    st.markdown("#### Day-over-Day Trend per Person")
+                    st.markdown("*How each person's production changed between days*")
+                    st.markdown("<br>", unsafe_allow_html=True)
+
+                    wt_trend = go.Figure()
+                    for i, person in enumerate(wt_persons):
+                        pdata = _wt[_wt['Person'] == person].sort_values('Date')
+                        color = _get_color(person, LOG_WT_COLORS, i)
+                        wt_trend.add_trace(go.Scatter(
+                            x=pdata['Short Date'], y=pdata['Videos'], mode='lines+markers',
+                            line=dict(color=color, width=3),
+                            marker=dict(size=10, color=color, line=dict(width=2, color='white')),
+                            name=person,
+                            hovertemplate=(
+                                f"<b>{person}</b><br>"
+                                "Date: %{x}<br>"
+                                "Videos: %{y}"
+                                "<extra></extra>"
+                            )
+                        ))
+                    wt_trend.update_layout(
+                        xaxis=dict(title="", tickfont=dict(color='#e2e8f0', size=11), categoryorder='array', categoryarray=wt_date_order, tickangle=-30),
+                        yaxis=dict(title=dict(text="Videos", font=AXIS_TITLE_FONT), tickfont=AXIS_TICK_FONT, gridcolor=GRID_COLOR, rangemode='tozero'),
+                        height=380, margin=dict(t=20, b=70, l=50, r=20),
+                        paper_bgcolor=CHART_BG, plot_bgcolor=CHART_BG,
+                        legend=dict(orientation="h", yanchor="bottom", y=1.02, font=LEGEND_FONT, bgcolor=CHART_BG)
+                    )
+                    st.plotly_chart(wt_trend, use_container_width=True, config=PLOTLY_CONFIG)
+
+                with rc:
+                    st.markdown("#### Share of Total Contribution")
+                    st.markdown("*Overall split of videos produced by each person*")
+                    st.markdown("<br>", unsafe_allow_html=True)
+
+                    wt_person_totals = _wt.groupby('Person')['Videos'].sum().reset_index().sort_values('Videos', ascending=False)
+                    wt_pie_colors = [_get_color(p, LOG_WT_COLORS, i) for i, p in enumerate(wt_person_totals['Person'])]
+                    wt_pie = px.pie(wt_person_totals, values='Videos', names='Person',
+                                   color_discrete_sequence=wt_pie_colors, hole=0.45)
+                    wt_pie.update_traces(
+                        textposition='inside', textinfo='value+percent',
+                        textfont=dict(size=15, color='white'),
+                        hovertemplate="<b>%{label}</b><br>Videos: %{value}<br>Share: %{percent}<extra></extra>"
+                    )
+                    wt_pie.update_layout(
+                        height=380, margin=dict(t=20, b=20, l=20, r=20),
+                        legend=dict(font=LEGEND_FONT, bgcolor=CHART_BG),
+                        paper_bgcolor=CHART_BG, plot_bgcolor=CHART_BG
+                    )
+                    st.plotly_chart(wt_pie, use_container_width=True, config=PLOTLY_CONFIG)
+
+                st.markdown("<br>", unsafe_allow_html=True)
+
+                # ── Chart: Person comparison bar ──
+                st.markdown("#### Person Comparison — Total Videos via WebTool")
+                st.markdown("<br>", unsafe_allow_html=True)
+                wt_comp = wt_person_totals.sort_values('Videos', ascending=True)
+                wt_comp_fig = go.Figure()
+                for _, row in wt_comp.iterrows():
+                    color = _get_color(row['Person'], LOG_WT_COLORS)
+                    wt_comp_fig.add_trace(go.Bar(
+                        y=[row['Person']], x=[row['Videos']], orientation='h',
+                        marker_color=color, showlegend=False,
+                        text=[f"{int(row['Videos'])} videos"],
+                        textposition='inside', textfont=LABEL_FONT,
+                        hovertemplate=(
+                            f"<b>{row['Person']}</b><br>"
+                            f"Total videos: {int(row['Videos'])}"
+                            "<extra></extra>"
+                        )
+                    ))
+                wt_comp_fig.update_traces(cliponaxis=False)
+                wt_comp_fig.update_layout(
+                    xaxis=dict(title=dict(text="Total Videos", font=AXIS_TITLE_FONT), tickfont=AXIS_TICK_FONT, gridcolor=GRID_COLOR,
+                               range=[0, wt_comp['Videos'].max() * 1.25]),
+                    yaxis=dict(tickfont=dict(color='#e2e8f0', size=14), automargin=True),
+                    height=220, margin=dict(t=10, b=20, l=10, r=20),
+                    paper_bgcolor=CHART_BG, plot_bgcolor=CHART_BG
+                )
+                st.plotly_chart(wt_comp_fig, use_container_width=True, config=PLOTLY_CONFIG)
+
+                st.markdown("<br>", unsafe_allow_html=True)
+                st.markdown("---")
+                st.markdown("<br>", unsafe_allow_html=True)
+
+                # ── Summary ──
+                st.markdown("### 📋 Summary")
+                st.markdown("<br>", unsafe_allow_html=True)
+                top_wt = wt_person_totals.iloc[0]
+                bottom_wt = wt_person_totals.iloc[-1]
+
+                st.markdown(
+                    f'<div class="insight-card"><strong>🌐 WebTool Video Production Summary</strong><br><br>'
+                    f'Over <strong>{wt_num_days} active day{"s" if wt_num_days > 1 else ""}</strong>, the team produced <strong>{wt_total} videos</strong> via WebTool.<br><br>'
+                    f'<strong>{top_wt["Person"]}</strong> produced the most with <strong>{int(top_wt["Videos"])} videos</strong>'
+                    + (f', while <strong>{bottom_wt["Person"]}</strong> produced <strong>{int(bottom_wt["Videos"])} videos</strong>.' if len(wt_persons) > 1 else '.')
+                    + '</div>',
+                    unsafe_allow_html=True
+                )
+
+                # ── Full data table ──
+                st.markdown("<br>", unsafe_allow_html=True)
+                st.markdown("### 📋 Full Daily Log — WebTool")
+                st.markdown("<br>", unsafe_allow_html=True)
+                wt_pivot = _wt.pivot_table(index=['Date', 'Date Label', 'Day'], columns='Person', values='Videos', aggfunc='sum', fill_value=0).reset_index()
+                wt_pivot = wt_pivot.sort_values('Date')
+                wt_pivot['Team Total'] = wt_pivot[wt_persons].sum(axis=1)
+                display_wt_cols = ['Date Label', 'Day'] + wt_persons + ['Team Total']
+                st.dataframe(wt_pivot[display_wt_cols].rename(columns={'Date Label': 'Date', 'Day': 'Weekday'}),
+                    hide_index=True, use_container_width=True)
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  TAB 8 — ALL COURSES
 # ═══════════════════════════════════════════════════════════════════
 with tab_allcourses:
     st.markdown("## Complete Course List")

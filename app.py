@@ -303,7 +303,9 @@ LOG_NB_COLORS = {
 }
 LOG_WT_COLORS = {
     'Anjani': '#f59e0b',
+    'Anjani De silva': '#f59e0b',
     'Menuka': '#ec4899',
+    'Other': '#64748b',
 }
 # Fallback palette for any new names
 LOG_FALLBACK_COLORS = ['#06b6d4', '#f43f5e', '#84cc16', '#e879f9', '#fb923c', '#22d3ee']
@@ -427,6 +429,61 @@ def load_video_log_data(file_bytes):
         return None, None
 
 
+# ── Load WebtoolStatus sheet (daily upload counts per person) ──
+def load_webtool_status_data(file_bytes):
+    """Parse the 'WebtoolStatus' sheet — daily WebTool upload counts per person."""
+    try:
+        if isinstance(file_bytes, bytes):
+            file_content = BytesIO(file_bytes)
+        else:
+            file_content = file_bytes
+
+        xls = pd.ExcelFile(file_content, engine='openpyxl')
+        sheet_name = None
+        for s in xls.sheet_names:
+            if 'webtool' in s.lower() and 'status' in s.lower():
+                sheet_name = s
+                break
+        if sheet_name is None:
+            return None
+
+        df = pd.read_excel(xls, sheet_name=sheet_name, header=1)
+        df.columns = df.columns.astype(str).str.strip()
+
+        if 'Date' not in df.columns:
+            return None
+
+        df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
+        df = df[df['Date'].notna()].copy()
+
+        # Identify person columns (all non-Date columns)
+        person_cols = [c for c in df.columns if c != 'Date']
+        for col in person_cols:
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(int)
+
+        # Melt to long format for easier processing
+        long_df = df.melt(id_vars=['Date'], value_vars=person_cols,
+                          var_name='Person', value_name='Videos')
+        long_df['Day'] = long_df['Date'].dt.day_name().str[:3]
+        long_df['Date Label'] = long_df['Date'].dt.strftime('%d %b %Y')
+        long_df['Short Date'] = long_df['Date'].dt.strftime('%d %b') + ' (' + long_df['Day'] + ')'
+
+        # Keep only days with any upload activity across any person
+        active_dates = long_df.groupby('Date')['Videos'].sum()
+        active_dates = active_dates[active_dates > 0].index
+        long_df = long_df[long_df['Date'].isin(active_dates)].copy()
+
+        # Drop persons who have zero total across all days (e.g. empty "Other" column)
+        person_totals = long_df.groupby('Person')['Videos'].sum()
+        active_persons = person_totals[person_totals > 0].index
+        long_df = long_df[long_df['Person'].isin(active_persons)].copy()
+
+        return long_df
+    except Exception as e:
+        st.error(f"Error loading WebtoolStatus data: {str(e)}")
+        return None
+
+
 def engineer_features(df):
     df['Videos Completed'] = df['Number of AI Videos']
     df['Podcasts Completed'] = df['Number of Podcasts']
@@ -507,10 +564,12 @@ file_bytes = download_excel_bytes(sharepoint_url)
 df = None
 nb_log = None
 wt_log = None
+wt_status_df = None
 
 if file_bytes is not None:
     df = load_data(file_bytes)
     nb_log, wt_log = load_video_log_data(file_bytes)
+    wt_status_df = load_webtool_status_data(file_bytes)
 
 if df is None:
     st.warning("⚠️ Automatic Update Failed. Company security may be blocking the direct link.")
@@ -520,6 +579,7 @@ if df is None:
         upload_bytes = uploaded_file.read()
         df = load_data(upload_bytes)
         nb_log, wt_log = load_video_log_data(upload_bytes)
+        wt_status_df = load_webtool_status_data(upload_bytes)
     else:
         st.stop()
 
@@ -1110,12 +1170,14 @@ with tab_videolog:
 
     # ── If SharePoint load didn't get the log, allow upload ──
     _nb = nb_log
-    _wt = wt_log
+    _wt = wt_status_df
     if (_nb is None or (isinstance(_nb, pd.DataFrame) and _nb.empty)) and (_wt is None or (isinstance(_wt, pd.DataFrame) and _wt.empty)):
         st.info("👇 Upload the tracker file to view the Chapter-wise AI Video Log data.")
         log_upload = st.file_uploader("Upload 'Additional Material Tracker Sheet.xlsx' (for Video Log tab)", type=['xlsx'], key='log_upload')
         if log_upload is not None:
-            _nb, _wt = load_video_log_data(log_upload.read())
+            upload_log_bytes = log_upload.read()
+            _nb, _ = load_video_log_data(upload_log_bytes)
+            _wt = load_webtool_status_data(upload_log_bytes)
 
     has_nb = _nb is not None and isinstance(_nb, pd.DataFrame) and not _nb.empty
     has_wt = _wt is not None and isinstance(_wt, pd.DataFrame) and not _wt.empty

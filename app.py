@@ -8,6 +8,7 @@ import re
 from io import BytesIO
 import numpy as np
 import textwrap
+from textbook_progress import render_textbook_progress
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(page_title="Course Content Tracker", layout="wide", page_icon="📊")
@@ -724,10 +725,10 @@ if st.button("🔄 Refresh Data"):
     st.rerun()
 st.markdown("---")
 
-tab_overview, tab_content, tab_subjects, tab_quickwins, tab_priority, tab_videolog, tab_allcourses = st.tabs([
+tab_overview, tab_content, tab_subjects, tab_quickwins, tab_priority, tab_videolog, tab_textbook, tab_allcourses = st.tabs([
     "📈 Overview", "🎯 Content Analysis", "📚 Subject & Level",
     "✅ Quick Wins", "⚠️ Priority Watch",
-    "📹 Chapter-wise AI Video Progress", "📋 All Courses"
+    "📹 Chapter-wise AI Video Progress", "📖 TextBook Progress", "📋 All Courses"
 ])
 
 # ═══════════════════════════════════════════════════════════════════
@@ -1878,6 +1879,13 @@ with tab_videolog:
                     'Date Label': 'Date', 'Day': 'Weekday', 'Count': 'Courses Uploaded'
                 })
                 st.dataframe(cp_table, hide_index=True, use_container_width=True)
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  TAB 6.5 — TEXTBOOK PROGRESS
+# ═══════════════════════════════════════════════════════════════════
+with tab_textbook:
+    render_textbook_progress()
 
 
 # ═══════════════════════════════════════════════════════════════════

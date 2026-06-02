@@ -67,7 +67,7 @@ Disable-ScheduledTask -TaskName "ImperialTracker-InactivityAlarm"
 
 ### Optional hardening
 
-- **Pin actions to commit SHAs** instead of `@v4`/`@v5` tags to fully defeat
+- **Pin actions to commit SHAs** instead of `@v5`/`@v6` tags to fully defeat
   tag-moving supply-chain attacks (e.g. `actions/checkout@<40-char-sha>`).
 - **Rotate the OpenRouter key** periodically; update the GitHub secret only.
 

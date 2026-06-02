@@ -1,0 +1,16 @@
+# Dependencies for the inactivity_monitor package only.
+# Install with:  pip install -r inactivity_monitor/requirements-monitor.txt
+#
+# (pandas and openpyxl are already used by the main dashboard, but are listed
+#  here too so the worker can run standalone.)
+apscheduler>=3.10
+httpx>=0.27
+pandas>=2.0
+openpyxl>=3.1
+
+# Optional — only needed if you run the worker inside a FastAPI app:
+fastapi>=0.110
+uvicorn[standard]>=0.29
+
+# Optional — auto-loads a .env file for the standalone runner:
+python-dotenv>=1.0

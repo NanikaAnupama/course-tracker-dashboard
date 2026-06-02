@@ -1,0 +1,88 @@
+name: Inactivity Monitor
+
+# Runs the Teams reports in GitHub's cloud, fully independent of any laptop.
+# This is what makes reports fire even when the laptop is off, asleep, or
+# out of battery — the schedule lives on GitHub's runners, not the machine.
+#
+# Two cron triggers (GitHub cron is ALWAYS in UTC):
+#   * 07:15 UTC  == 12:45 IST  -> daily analytics report (always sends)
+#   * top of every hour        -> inactivity alarm (sends only if data is stale)
+#
+# NOTE: GitHub's scheduler is best-effort. Under high load a run can be delayed
+# a few minutes, and scheduled workflows are auto-disabled after 60 days with no
+# repo commits (re-enable from the Actions tab if that ever happens).
+
+on:
+  schedule:
+    - cron: "15 7 * * *"   # 12:45 Asia/Kolkata daily report
+    - cron: "0 * * * *"    # hourly inactivity alarm
+  workflow_dispatch:        # manual "Run workflow" button for testing
+    inputs:
+      mode:
+        description: "Which job to run manually"
+        type: choice
+        default: report
+        options:
+          - report   # send the daily analytics report now (always sends)
+          - once     # run the inactivity alarm now (sends only if stale)
+
+# Least privilege: this workflow only needs to read the repo to check out code.
+permissions:
+  contents: read
+
+# Never let two runs overlap (e.g. a slow hourly run colliding with the daily).
+concurrency:
+  group: inactivity-monitor
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: inactivity_monitor/requirements-monitor.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r inactivity_monitor/requirements-monitor.txt
+
+      # Pick the command WITHOUT interpolating untrusted text into the shell.
+      # github.event.schedule / inputs.mode are read from env, never inlined.
+      - name: Resolve which job to run
+        id: resolve
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          SCHEDULE: ${{ github.event.schedule }}
+          MODE: ${{ inputs.mode }}
+        run: |
+          if [ "$EVENT_NAME" = "schedule" ]; then
+            if [ "$SCHEDULE" = "15 7 * * *" ]; then
+              echo "args=--report" >> "$GITHUB_OUTPUT"
+            else
+              echo "args=--once" >> "$GITHUB_OUTPUT"
+            fi
+          elif [ "$MODE" = "once" ]; then
+            echo "args=--once" >> "$GITHUB_OUTPUT"
+          else
+            echo "args=--report" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run inactivity monitor
+        env:
+          # Secrets are injected only here, as env vars, and are auto-masked in
+          # logs by GitHub. They are NEVER written to the repo or printed.
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          TEAMS_WEBHOOK_URL: ${{ secrets.TEAMS_WEBHOOK_URL }}
+          # Optional overrides — set as repo variables/secrets only if needed.
+          SHAREPOINT_FILE_URL: ${{ secrets.SHAREPOINT_FILE_URL }}
+          OPENROUTER_MODEL: ${{ vars.OPENROUTER_MODEL }}
+        run: python -m inactivity_monitor ${{ steps.resolve.outputs.args }}

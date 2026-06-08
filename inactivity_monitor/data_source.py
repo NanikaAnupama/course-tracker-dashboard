@@ -23,6 +23,7 @@ import httpx
 import pandas as pd
 
 from .config import MonitorConfig
+from .metrics import build_metrics
 
 logger = logging.getLogger(__name__)
 
@@ -183,6 +184,10 @@ def build_data_digest(file_bytes: bytes) -> Dict[str, Any]:
             sheet_summary["rows_last_7_days"] = 0
 
         digest["sheets"].append(sheet_summary)
+
+    # Rich, sheet-specific metrics (content completion, per-person output, etc.)
+    # recomputed from the freshly downloaded bytes so the alert is real-time.
+    digest["metrics"] = build_metrics(file_bytes)
 
     return digest
 

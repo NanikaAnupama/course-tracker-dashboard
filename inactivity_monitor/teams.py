@@ -17,6 +17,7 @@ import httpx
 from .analytics import AnalysisResult
 from .config import MonitorConfig
 from .data_source import DataStatus
+from .metrics import card_sections
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +28,48 @@ _ADAPTIVE_CARD_VERSION = "1.5"
 
 def _fact(title: str, value: str) -> Dict[str, str]:
     return {"title": title, "value": value}
+
+
+def _metrics_blocks(status: DataStatus) -> List[Dict[str, Any]]:
+    """Render the live sheet-by-sheet metrics as headed FactSets.
+
+    Pulls the precomputed numbers from ``status.digest['metrics']`` so the card
+    always shows concrete figures (content done vs target, per-person output,
+    upload throughput) even when the LLM narrative is thin.
+    """
+    metrics = (status.digest or {}).get("metrics") or {}
+    sections = card_sections(metrics)
+    if not sections:
+        return []
+
+    blocks: List[Dict[str, Any]] = [
+        {
+            "type": "TextBlock",
+            "text": "📈 Live metrics",
+            "weight": "Bolder",
+            "size": "Medium",
+            "color": "Accent",
+            "spacing": "Medium",
+            "wrap": True,
+        }
+    ]
+    for heading, rows in sections:
+        blocks.append(
+            {
+                "type": "TextBlock",
+                "text": heading,
+                "weight": "Bolder",
+                "spacing": "Medium",
+                "wrap": True,
+            }
+        )
+        blocks.append(
+            {
+                "type": "FactSet",
+                "facts": [_fact(label, value) for label, value in rows],
+            }
+        )
+    return blocks
 
 
 def _bullet_block(items: List[str], color: str) -> List[Dict[str, Any]]:
@@ -110,6 +153,22 @@ def build_adaptive_card(
             "spacing": "Medium",
         },
     ]
+
+    # --- Live metrics: deterministic, sheet-by-sheet figures ---
+    body.extend(_metrics_blocks(status))
+
+    if analysis.highlights:
+        body.append(
+            {
+                "type": "TextBlock",
+                "text": "Key insights",
+                "weight": "Bolder",
+                "color": "Accent",
+                "spacing": "Medium",
+                "wrap": True,
+            }
+        )
+        body.extend(_bullet_block(analysis.highlights, "Default"))
 
     if analysis.critical_findings:
         body.append(

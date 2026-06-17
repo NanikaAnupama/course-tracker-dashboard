@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import httpx
 
@@ -18,6 +18,7 @@ from .analytics import AnalysisResult
 from .config import MonitorConfig
 from .data_source import DataStatus
 from .metrics import card_sections
+from .snapshot import ReportComparison, format_change
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +73,59 @@ def _metrics_blocks(status: DataStatus) -> List[Dict[str, Any]]:
     return blocks
 
 
+def _comparison_blocks(comparison: ReportComparison) -> List[Dict[str, Any]]:
+    """Render the % change since the last report, with a note on how it's measured."""
+    if comparison.changes:
+        rows = [(change.label, format_change(change)) for change in comparison.changes]
+    else:
+        rows = []
+
+    baseline = (
+        f"since the last report (sent {comparison.previous_label})"
+        if comparison.previous_label
+        else "since the last report"
+    )
+
+    if comparison.has_baseline:
+        note = (
+            f"Figures show the change {baseline}. Reports go out Mon & Fri at "
+            "12:45 IST — so Friday is measured against Monday, and Monday against "
+            "the previous Friday. Counts show the change as +/- value and %; "
+            "completion shows the change in percentage points (pts)."
+        )
+    else:
+        note = (
+            "This is the first report on record, so there is nothing to compare "
+            "against yet. From the next report (Mon & Fri, 12:45 IST) this section "
+            "will show the % change since the previous one."
+        )
+
+    blocks: List[Dict[str, Any]] = [
+        {
+            "type": "TextBlock",
+            "text": "🔼 Change since last report",
+            "weight": "Bolder",
+            "size": "Medium",
+            "color": "Accent",
+            "spacing": "Medium",
+            "wrap": True,
+        },
+        {
+            "type": "TextBlock",
+            "text": note,
+            "wrap": True,
+            "isSubtle": True,
+            "size": "Small",
+            "spacing": "None",
+        },
+    ]
+    if rows:
+        blocks.append(
+            {"type": "FactSet", "facts": [_fact(label, value) for label, value in rows]}
+        )
+    return blocks
+
+
 def _bullet_block(items: List[str], color: str) -> List[Dict[str, Any]]:
     """Render a list of strings as compact, wrapping TextBlocks with a bullet."""
     blocks: List[Dict[str, Any]] = []
@@ -89,14 +143,20 @@ def _bullet_block(items: List[str], color: str) -> List[Dict[str, Any]]:
 
 
 def build_adaptive_card(
-    status: DataStatus, analysis: AnalysisResult, *, report_mode: bool = False
+    status: DataStatus,
+    analysis: AnalysisResult,
+    *,
+    report_mode: bool = False,
+    comparison: Optional[ReportComparison] = None,
 ) -> Dict[str, Any]:
     """Assemble the full Teams message payload (attachment wrapper + card).
 
     Args:
-        report_mode: when True, frame the card as a scheduled daily analytics
-            digest (blue accent). When False (default), frame it as an urgent
+        report_mode: when True, frame the card as a scheduled analytics digest
+            (blue accent). When False (default), frame it as an urgent
             ⚠️ Inactivity Warning (red accent).
+        comparison: when supplied (report mode), adds the "change since last
+            report" section with the % change vs the previously sent message.
     """
     last_update = (
         status.last_update.strftime("%Y-%m-%d %H:%M UTC")
@@ -156,6 +216,10 @@ def build_adaptive_card(
 
     # --- Live metrics: deterministic, sheet-by-sheet figures ---
     body.extend(_metrics_blocks(status))
+
+    # --- Change vs the previously sent report (report mode only) ---
+    if comparison is not None:
+        body.extend(_comparison_blocks(comparison))
 
     if analysis.highlights:
         body.append(

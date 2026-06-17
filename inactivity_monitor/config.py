@@ -22,6 +22,14 @@ DEFAULT_SHAREPOINT_URL = (
 DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1/chat/completions"
 DEFAULT_OPENROUTER_MODEL = "deepseek/deepseek-v3.2-exp"
 
+# Where each report's headline figures are persisted so the next run can compute
+# the change since the last message. Lives inside the package so the GitHub
+# Actions workflow can commit it back to the repo between runs.
+DEFAULT_SNAPSHOT_PATH = os.path.join(os.path.dirname(__file__), "last_report_snapshot.json")
+
+# Days the scheduled report goes out (APScheduler/cron day-of-week tokens).
+DEFAULT_REPORT_DAYS = "mon,fri"
+
 
 class ConfigError(RuntimeError):
     """Raised when required environment variables are missing or invalid."""
@@ -89,6 +97,8 @@ class MonitorConfig:
     daily_report_hour: int
     daily_report_minute: int
     daily_report_timezone: str
+    daily_report_days: str
+    report_snapshot_path: str
 
     @classmethod
     def from_env(cls) -> "MonitorConfig":
@@ -129,4 +139,6 @@ class MonitorConfig:
             daily_report_hour=report_hour,
             daily_report_minute=report_minute,
             daily_report_timezone=(os.getenv("DAILY_REPORT_TIMEZONE") or "Asia/Kolkata").strip(),
+            daily_report_days=(os.getenv("DAILY_REPORT_DAYS") or DEFAULT_REPORT_DAYS).strip(),
+            report_snapshot_path=(os.getenv("REPORT_SNAPSHOT_PATH") or DEFAULT_SNAPSHOT_PATH).strip(),
         )

@@ -18,6 +18,13 @@ from apscheduler.triggers.cron import CronTrigger
 from .analytics import synthesise_analysis
 from .config import MonitorConfig
 from .data_source import DataStatus, get_data_status
+from .snapshot import (
+    ReportComparison,
+    build_comparison,
+    flatten_metrics,
+    load_snapshot,
+    save_snapshot,
+)
 from .teams import build_adaptive_card, send_teams_alert
 
 logger = logging.getLogger(__name__)
@@ -27,12 +34,22 @@ _REPORT_JOB_ID = "daily_report"
 
 
 async def _analyse_and_send(
-    config: MonitorConfig, status: DataStatus, *, report_mode: bool
-) -> None:
-    """Run the LLM analysis and post the resulting card to Teams."""
+    config: MonitorConfig,
+    status: DataStatus,
+    *,
+    report_mode: bool,
+    comparison: Optional[ReportComparison] = None,
+) -> bool:
+    """Run the LLM analysis and post the resulting card to Teams.
+
+    Returns ``True`` when Teams accepted the card. ``comparison`` (report mode
+    only) injects the change-since-last-report section.
+    """
     analysis = await synthesise_analysis(config, status, report_mode=report_mode)
-    payload = build_adaptive_card(status, analysis, report_mode=report_mode)
-    await send_teams_alert(config, payload)
+    payload = build_adaptive_card(
+        status, analysis, report_mode=report_mode, comparison=comparison
+    )
+    return await send_teams_alert(config, payload)
 
 
 async def run_inactivity_check(config: MonitorConfig) -> DataStatus:
@@ -67,10 +84,12 @@ async def run_inactivity_check(config: MonitorConfig) -> DataStatus:
 
 
 async def run_daily_report(config: MonitorConfig) -> DataStatus:
-    """Generate and send the daily analytics digest — always sends.
+    """Generate and send the scheduled analytics digest — always sends.
 
-    Unlike the inactivity alarm, this runs on a fixed daily schedule and posts
-    a report to Teams regardless of whether the data is stale.
+    Runs on a fixed schedule (Mon & Fri) and posts a report to Teams regardless
+    of whether the data is stale. Each report carries the % change since the
+    previously sent report, then persists its own figures as the new baseline so
+    the next run (the following Mon/Fri) can diff against them.
     """
     try:
         status = await get_data_status(config)
@@ -78,8 +97,27 @@ async def run_daily_report(config: MonitorConfig) -> DataStatus:
         logger.exception("Daily report failed while fetching data status")
         raise
 
-    logger.info("Generating daily analytics report (always sends).")
-    await _analyse_and_send(config, status, report_mode=True)
+    current_flat = flatten_metrics((status.digest or {}).get("metrics") or {})
+    previous_snapshot = load_snapshot(config.report_snapshot_path)
+    comparison = build_comparison(
+        current_flat, previous_snapshot, config.daily_report_timezone
+    )
+
+    logger.info(
+        "Generating scheduled analytics report (baseline: %s).",
+        comparison.previous_label or "none yet",
+    )
+    sent = await _analyse_and_send(
+        config, status, report_mode=True, comparison=comparison
+    )
+
+    # Only advance the baseline once the report has actually gone out, so the
+    # next message always compares against the last figures the team really saw.
+    if sent and current_flat:
+        save_snapshot(config.report_snapshot_path, current_flat, config.openrouter_model)
+    elif not sent:
+        logger.warning("Report not delivered; keeping previous snapshot as baseline.")
+
     return status
 
 
@@ -101,8 +139,10 @@ def create_scheduler(config: MonitorConfig) -> AsyncIOScheduler:
     Two independent jobs (either can be disabled via env vars):
       * Inactivity alarm – every ``CHECK_INTERVAL_MINUTES`` (default 60),
         sends only when the data is stale.
-      * Daily report – fires at ``DAILY_REPORT_TIME`` in ``DAILY_REPORT_TIMEZONE``
-        (default 12:45 Asia/Kolkata), always sends.
+      * Scheduled report – fires on ``DAILY_REPORT_DAYS`` (default Mon & Fri) at
+        ``DAILY_REPORT_TIME`` in ``DAILY_REPORT_TIMEZONE`` (default 12:45
+        Asia/Kolkata), always sends, and includes the % change since the last
+        report.
     """
     scheduler = AsyncIOScheduler(timezone="UTC")
 
@@ -126,6 +166,7 @@ def create_scheduler(config: MonitorConfig) -> AsyncIOScheduler:
         scheduler.add_job(
             _guarded(lambda: run_daily_report(config), "Daily report"),
             trigger=CronTrigger(
+                day_of_week=config.daily_report_days,
                 hour=config.daily_report_hour,
                 minute=config.daily_report_minute,
                 timezone=config.daily_report_timezone,
@@ -136,7 +177,8 @@ def create_scheduler(config: MonitorConfig) -> AsyncIOScheduler:
             replace_existing=True,
         )
         logger.info(
-            "Daily report enabled: %02d:%02d %s.",
+            "Scheduled report enabled: %s at %02d:%02d %s.",
+            config.daily_report_days,
             config.daily_report_hour,
             config.daily_report_minute,
             config.daily_report_timezone,

@@ -8,9 +8,14 @@ the machine being awake.
 
 | Trigger | Cron (UTC) | Local (IST) | Action |
 |---------|-----------|-------------|--------|
-| Daily report  | `15 7 * * *` | 12:45 | `--report` (always sends 📊) |
+| Scheduled report | `15 7 * * 1,5` | 12:45 Mon & Fri | `--report` (always sends 📊, with % change vs the last report) |
 | Inactivity alarm | `0 * * * *` | hourly | `--once` (sends ⚠️ only if data >2 days stale) |
 | Manual test | — | — | "Run workflow" button → pick `report` or `once` |
+
+The report compares each message against the previous one — **Friday vs Monday,
+Monday vs the previous Friday**. The baseline is stored in
+[`last_report_snapshot.json`](last_report_snapshot.json) and committed back to the
+repo after every report run, so it survives between the ephemeral cloud runs.
 
 ## One-time setup: add the two secrets (web UI — keys never leave your hands)
 
@@ -38,7 +43,7 @@ through any local tool.
 1. After pushing, open the **Actions** tab → **Inactivity Monitor** →
    **Run workflow** → choose `report` → **Run workflow**.
 2. Watch the run go green and confirm the 📊 card lands in Teams.
-3. Then leave the cron triggers to fire on their own (12:45 IST + hourly).
+3. Then leave the cron triggers to fire on their own (12:45 IST Mon & Fri + hourly alarm).
 
 ## After cloud is confirmed: retire the local tasks (avoid duplicate messages)
 
@@ -60,8 +65,10 @@ Disable-ScheduledTask -TaskName "ImperialTracker-InactivityAlarm"
   never echoes them.
 - **`.env` is gitignored** (see repo-root `.gitignore`) so the real keys can
   never be committed by accident. It has never been in git history.
-- **Least privilege:** the workflow declares `permissions: contents: read` —
-  it can only read the repo, nothing else.
+- **Scoped write:** the workflow declares `permissions: contents: write` — the
+  minimum needed to commit the report-snapshot baseline back to the repo. It has
+  no other scopes (issues, packages, etc.). The commit uses `[skip ci]` so it
+  never triggers further workflow runs.
 - **No overlap:** a `concurrency` group + `timeout-minutes: 10` stop runs from
   piling up or hanging.
 

@@ -5,8 +5,13 @@ name: Inactivity Monitor
 # out of battery — the schedule lives on GitHub's runners, not the machine.
 #
 # Two cron triggers (GitHub cron is ALWAYS in UTC):
-#   * 07:15 UTC  == 12:45 IST  -> daily analytics report (always sends)
-#   * top of every hour        -> inactivity alarm (sends only if data is stale)
+#   * 07:15 UTC Mon & Fri == 12:45 IST  -> analytics report (always sends)
+#   * top of every hour                 -> inactivity alarm (sends only if stale)
+#
+# The report compares each message against the previous one (Fri vs Mon, Mon vs
+# the previous Fri). To survive between ephemeral runs, the % baseline is stored
+# in inactivity_monitor/last_report_snapshot.json and committed back after each
+# report — which is why this workflow needs `contents: write`.
 #
 # NOTE: GitHub's scheduler is best-effort. Under high load a run can be delayed
 # a few minutes, and scheduled workflows are auto-disabled after 60 days with no
@@ -14,8 +19,8 @@ name: Inactivity Monitor
 
 on:
   schedule:
-    - cron: "15 7 * * *"   # 12:45 Asia/Kolkata daily report
-    - cron: "0 * * * *"    # hourly inactivity alarm
+    - cron: "15 7 * * 1,5"  # 12:45 Asia/Kolkata, Monday & Friday report
+    - cron: "0 * * * *"     # hourly inactivity alarm
   workflow_dispatch:        # manual "Run workflow" button for testing
     inputs:
       mode:
@@ -26,9 +31,10 @@ on:
           - report   # send the daily analytics report now (always sends)
           - once     # run the inactivity alarm now (sends only if stale)
 
-# Least privilege: this workflow only needs to read the repo to check out code.
+# Needs write access to commit the report snapshot (the % change baseline) back
+# to the repo after each scheduled report.
 permissions:
-  contents: read
+  contents: write
 
 # Never let two runs overlap (e.g. a slow hourly run colliding with the daily).
 concurrency:
@@ -65,7 +71,7 @@ jobs:
           MODE: ${{ inputs.mode }}
         run: |
           if [ "$EVENT_NAME" = "schedule" ]; then
-            if [ "$SCHEDULE" = "15 7 * * *" ]; then
+            if [ "$SCHEDULE" = "15 7 * * 1,5" ]; then
               echo "args=--report" >> "$GITHUB_OUTPUT"
             else
               echo "args=--once" >> "$GITHUB_OUTPUT"
@@ -86,3 +92,22 @@ jobs:
           SHAREPOINT_FILE_URL: ${{ secrets.SHAREPOINT_FILE_URL }}
           OPENROUTER_MODEL: ${{ vars.OPENROUTER_MODEL }}
         run: python -m inactivity_monitor ${{ steps.resolve.outputs.args }}
+
+      # Persist the % change baseline. The report run rewrites
+      # last_report_snapshot.json; commit it so the next Mon/Fri run can diff
+      # against it. The hourly alarm never touches the file, so there's nothing
+      # to commit on those runs and this step is a harmless no-op.
+      - name: Commit report snapshot
+        if: steps.resolve.outputs.args == '--report'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add inactivity_monitor/last_report_snapshot.json
+          # --cached catches both a brand-new (untracked) file and edits to an
+          # existing one; only commit/push when something actually changed.
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: update report snapshot baseline [skip ci]"
+            git push
+          else
+            echo "Snapshot unchanged; nothing to commit."
+          fi

@@ -1,0 +1,10 @@
+fastapi>=0.110
+uvicorn[standard]>=0.29
+pandas>=2.0
+openpyxl>=3.1
+requests>=2.31
+numpy>=1.26
+# Inactivity monitor (hosted in-process by the API)
+apscheduler>=3.10
+httpx>=0.27
+python-dotenv>=1.0

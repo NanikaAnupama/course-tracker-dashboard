@@ -20,6 +20,10 @@ env/
 inactivity_monitor/monitor.log
 *.log
 
+# --- Node / frontend ---
+node_modules/
+frontend/dist/
+
 # --- OS / editor cruft ---
 .DS_Store
 Thumbs.db

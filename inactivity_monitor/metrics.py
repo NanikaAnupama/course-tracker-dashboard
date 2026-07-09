@@ -56,10 +56,16 @@ _SUMMARY_ROW_RE = r"status of the project|total"
 
 
 def _drop_summary_rows(df: "pd.DataFrame", name_col: str) -> "pd.DataFrame":
-    """Remove blank and pre-aggregated summary rows from a course-keyed sheet."""
+    """Remove pre-aggregated summary rows from a course-keyed sheet.
+
+    Rows with a blank name are deliberately kept: a course whose name was
+    accidentally deleted in the sheet may still carry production counts, and
+    dropping it would silently undercount every total (this happened — see
+    the 'Original' sheet, a row with only a course link left).
+    """
     names = df[name_col].astype(str)
     is_summary = names.str.contains(_SUMMARY_ROW_RE, case=False, na=False)
-    return df[df[name_col].notna() & ~is_summary].copy()
+    return df[~is_summary].copy()
 
 
 # --------------------------------------------------------------------------- #
@@ -80,22 +86,48 @@ def _content_production(xls: "pd.ExcelFile") -> Optional[Dict[str, Any]]:
     if "Number of Units" not in df.columns or "Course Name" not in df.columns:
         return None
 
+    # Capture the sheet's own baked totals row before dropping it, so the
+    # computed figures can be cross-checked against it further down.
+    all_names = df["Course Name"].astype(str)
+    baked_mask = all_names.str.contains("status of the project", case=False, na=False) \
+        & ~all_names.str.contains("%", regex=False)
+    baked_row = df[baked_mask].iloc[0] if baked_mask.any() else None
+
     # Drop the baked-in "Status of the Project" totals rows before summing.
     df = _drop_summary_rows(df, "Course Name")
 
-    for col in (
+    count_cols = (
         "Number of Units",
         "Number of AI Videos",
         "Number of Podcasts",
         "Number of Study Guides",
         "Number of H5P Quizzes",
-    ):
+    )
+    for col in count_cols:
         if col in df.columns:
             df[col] = _num(df[col])
 
-    active = df[df["Number of Units"].fillna(0) > 0].copy()
+    # A row is active when it has units OR any production counts. Rows with
+    # counts but a blank/zero unit cell must still be included, or their
+    # output disappears from every total.
+    content_cols = [c for c in count_cols[1:] if c in df.columns]
+    has_content = df[content_cols].fillna(0).sum(axis=1) > 0
+    has_units = df["Number of Units"].fillna(0) > 0
+    active = df[has_units | has_content].copy()
     if active.empty:
         return None
+
+    # Row-level data problems worth shouting about in the Teams card.
+    data_warnings: List[str] = []
+    blank_name = active["Course Name"].isna() \
+        | (active["Course Name"].astype(str).str.strip() == "")
+    for idx in active.index[blank_name]:
+        data_warnings.append(
+            f"Sheet row {idx + 2} has production counts but no course name"
+        )
+    for idx in active.index[~has_units.reindex(active.index, fill_value=False)]:
+        name = str(active.at[idx, "Course Name"]).strip() or f"sheet row {idx + 2}"
+        data_warnings.append(f"'{name}' has production counts but no unit count")
 
     units = int(active["Number of Units"].sum())
     videos = int(active.get("Number of AI Videos", 0).fillna(0).sum())
@@ -133,6 +165,29 @@ def _content_production(xls: "pd.ExcelFile") -> Optional[Dict[str, Any]]:
     }
     if quizzes is not None:
         result["h5p_quizzes_done"] = quizzes
+
+    # Cross-check computed totals against the sheet's own SUM row: any
+    # divergence means either a row the parser mishandled or formula drift
+    # in the sheet, and must be surfaced rather than silently reported.
+    if baked_row is not None:
+        checks = [
+            ("Number of Units", "Units", units),
+            ("Number of AI Videos", "AI Videos", videos),
+            ("Number of Podcasts", "Podcasts", podcasts),
+            ("Number of Study Guides", "Study Guides", guides),
+            ("Number of H5P Quizzes", "H5P Quizzes", quizzes),
+        ]
+        for col, label, computed in checks:
+            if computed is None or col not in baked_row.index:
+                continue
+            baked_val = pd.to_numeric(baked_row[col], errors="coerce")
+            if pd.notna(baked_val) and int(baked_val) != int(computed):
+                data_warnings.append(
+                    f"{label}: computed total {int(computed)} differs from the "
+                    f"sheet's own total {int(baked_val)}"
+                )
+    if data_warnings:
+        result["data_warnings"] = data_warnings
     return result
 
 
@@ -388,6 +443,13 @@ def card_sections(metrics: Dict[str, Any]) -> List[Tuple[str, List[Tuple[str, st
         if "h5p_quizzes_done" in cp:
             rows.append(("H5P quizzes", str(cp["h5p_quizzes_done"])))
         sections.append(("📦 Content production (Original)", rows))
+
+    warns = (cp or {}).get("data_warnings")
+    if warns:
+        sections.append((
+            "⚠️ Tracker sheet needs attention",
+            [(f"Issue {i + 1}", w) for i, w in enumerate(warns)],
+        ))
 
     ch = metrics.get("chapters")
     if ch:

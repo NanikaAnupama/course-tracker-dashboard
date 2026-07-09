@@ -313,24 +313,40 @@ LOG_FALLBACK_COLORS = ['#06b6d4', '#f43f5e', '#84cc16', '#e879f9', '#fb923c', '#
 
 
 # --- ROBUST DATA CLEANING FUNCTION ---
+# Mirrors backend/data.py: rows carrying production counts are never dropped,
+# even when the course name or unit count is blank in the sheet — dropping
+# them silently undercounts every dashboard total.
 def clean_and_preprocess(df):
     df.columns = df.columns.str.strip()
-    df = df[df['Course Name'].notna()].copy()
-    df = df[~df['Course Name'].str.contains('Status of the Project', case=False, na=False)]
+    names = df['Course Name'].astype(str)
+    df = df[~names.str.contains('Status of the Project', case=False, na=False)].copy()
+    numeric_cols = ['Number of Units', 'Number of AI Videos', 'Number of Podcasts', 'Number of Study Guides', 'Number of H5P Quizzes']
+    numeric_cols = [c for c in numeric_cols if c in df.columns]
+    for col in numeric_cols:
+        df[col] = pd.to_numeric(df[col], errors='coerce')
+
+    carries_data = df[numeric_cols].fillna(0).sum(axis=1) > 0
+    name_blank = df['Course Name'].isna() | (df['Course Name'].astype(str).str.strip() == '')
+    for idx in df.index[name_blank & carries_data]:
+        link = df.at[idx, 'Course Link'] if 'Course Link' in df.columns else None
+        m = re.search(r'/course/([^/?#]+)', str(link)) if pd.notna(link) else None
+        derived = m.group(1).strip('-/').replace('-', ' ').strip().title() if m else ''
+        df.at[idx, 'Course Name'] = derived or f'Unnamed course (sheet row {idx + 2})'
+    df = df[~name_blank | carries_data].copy()
+
     df['Course Name'] = df['Course Name'].astype(str).str.strip()
     df['Course Name'] = df['Course Name'].str.replace(r'^\n+', '', regex=True)
     df['Course Name'] = df['Course Name'].str.replace(r'\n+', ' ', regex=True)
     df['Course Name'] = df['Course Name'].str.replace(r'\s+', ' ', regex=True)
-    numeric_cols = ['Number of Units', 'Number of AI Videos', 'Number of Podcasts', 'Number of Study Guides', 'Number of H5P Quizzes']
-    for col in numeric_cols:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors='coerce')
-    df = df[df['Number of Units'].notna() & (df['Number of Units'] > 0)].copy()
-    for col in ['Number of AI Videos', 'Number of Podcasts', 'Number of Study Guides']:
+
+    content_cols = [c for c in numeric_cols if c != 'Number of Units']
+    units_ok = df['Number of Units'].notna() & (df['Number of Units'] > 0)
+    has_content = df[content_cols].fillna(0).sum(axis=1) > 0
+    df = df[units_ok | has_content].copy()
+
+    for col in content_cols:
         df[col] = df[col].fillna(0).astype(int)
-    if 'Number of H5P Quizzes' in df.columns:
-        df['Number of H5P Quizzes'] = df['Number of H5P Quizzes'].fillna(0).astype(int)
-    df['Number of Units'] = df['Number of Units'].astype(int)
+    df['Number of Units'] = df['Number of Units'].fillna(0).clip(lower=0).astype(int)
     return df
 
 @st.cache_data(ttl=300)

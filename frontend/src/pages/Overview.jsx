@@ -19,6 +19,7 @@ export default function Overview() {
 
   return (
     <>
+      <DataQualityBanner dq={data.dataQuality} />
       <div className="grid kpi-grid">
         <KpiCard icon="📚" tint="#2563eb" label="Total Courses" value={fmtInt(data.totalCourses)}
           note={`${fmtInt(data.totalUnits)} units in total`} />
@@ -147,6 +148,34 @@ export default function Overview() {
         </div>
       </Card>
     </>
+  )
+}
+
+// Surfaces tracker-sheet problems (blank names/units, totals drifting from the
+// sheet's own SUM row) so bad rows are fixed at the source instead of silently
+// skewing every figure below.
+function DataQualityBanner({ dq }) {
+  if (!dq || dq.ok) return null
+  return (
+    <div style={{
+      border: '1px solid #f0c36d', background: 'rgba(245, 190, 80, 0.12)',
+      borderRadius: 12, padding: '12px 16px', marginBottom: 16, fontSize: 13.5,
+    }}>
+      <b>⚠️ Tracker sheet needs attention</b>
+      <ul style={{ margin: '6px 0 0', paddingLeft: 20 }}>
+        {dq.issues.map((i, k) => (
+          <li key={`i${k}`}><b>{i.course}</b> — {i.issue}</li>
+        ))}
+        {dq.totalsMismatches.map((m, k) => (
+          <li key={`m${k}`}>
+            {m.metric}: dashboard total {fmtInt(m.dashboard)} differs from the sheet&apos;s own total {fmtInt(m.sheet)}
+          </li>
+        ))}
+      </ul>
+      <div style={{ marginTop: 6, color: 'var(--muted)' }}>
+        Numbers below already include the affected rows where possible — fix the highlighted cells in the SharePoint sheet to clear this.
+      </div>
+    </div>
   )
 }
 

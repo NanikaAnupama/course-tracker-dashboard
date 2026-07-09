@@ -134,6 +134,7 @@ def overview():
         "inProgressCourses": int(len(df)) - complete_courses - not_started,
         "statusBreakdown": status_breakdown,
         "contentTypes": content_types,
+        "dataQuality": data.get_data_quality(),
     }
 
 

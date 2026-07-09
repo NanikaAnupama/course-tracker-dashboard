@@ -63,25 +63,68 @@ def get_textbook_bytes() -> bytes | None:
 
 # ── Main tracker sheet ──────────────────────────────────────────────
 
+NUMERIC_COLS = ["Number of Units", "Number of AI Videos", "Number of Podcasts",
+                "Number of Study Guides", "Number of H5P Quizzes"]
+CONTENT_COLS = ["Number of AI Videos", "Number of Podcasts",
+                "Number of Study Guides", "Number of H5P Quizzes"]
+
+
+def _derive_name_from_link(link) -> str | None:
+    """Best-effort course name from a southlondoncollege course URL slug."""
+    if link is None or (isinstance(link, float) and np.isnan(link)):
+        return None
+    text = str(link).strip()
+    m = re.search(r"/course/([^/?#]+)", text)
+    if m is None:
+        return None
+    name = m.group(1).strip("-/").replace("-", " ").strip()
+    return name.title() if name else None
+
+
 def clean_and_preprocess(df: pd.DataFrame) -> pd.DataFrame:
     df.columns = df.columns.str.strip()
-    df = df[df["Course Name"].notna()].copy()
-    df = df[~df["Course Name"].str.contains("Status of the Project", case=False, na=False)]
+    names = df["Course Name"].astype(str)
+    df = df[~names.str.contains("Status of the Project", case=False, na=False)].copy()
+
+    numeric_cols = [c for c in NUMERIC_COLS if c in df.columns]
+    for col in numeric_cols:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    # A row "carries data" when any production column holds a positive number.
+    # Such rows must never be dropped, whatever else is wrong with them —
+    # dropping one silently undercounts every total on the dashboard.
+    carries_data = df[numeric_cols].fillna(0).sum(axis=1) > 0
+
+    df["Data Issue"] = ""
+
+    name_blank = df["Course Name"].isna() | (df["Course Name"].astype(str).str.strip() == "")
+    for idx in df.index[name_blank & carries_data]:
+        link = df.at[idx, "Course Link"] if "Course Link" in df.columns else None
+        derived = _derive_name_from_link(link)
+        df.at[idx, "Course Name"] = derived or f"Unnamed course (sheet row {idx + 2})"
+        df.at[idx, "Data Issue"] = "Course name is blank in the tracker sheet"
+    df = df[~name_blank | carries_data].copy()
+
     df["Course Name"] = df["Course Name"].astype(str).str.strip()
     df["Course Name"] = df["Course Name"].str.replace(r"^\n+", "", regex=True)
     df["Course Name"] = df["Course Name"].str.replace(r"\n+", " ", regex=True)
     df["Course Name"] = df["Course Name"].str.replace(r"\s+", " ", regex=True)
-    numeric_cols = ["Number of Units", "Number of AI Videos", "Number of Podcasts",
-                    "Number of Study Guides", "Number of H5P Quizzes"]
-    for col in numeric_cols:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-    df = df[df["Number of Units"].notna() & (df["Number of Units"] > 0)].copy()
-    for col in ["Number of AI Videos", "Number of Podcasts", "Number of Study Guides"]:
+
+    # Rows with content counts but no unit count also survive (units become 0
+    # so the completion maths stays defined) instead of vanishing.
+    content_cols = [c for c in CONTENT_COLS if c in df.columns]
+    units_ok = df["Number of Units"].notna() & (df["Number of Units"] > 0)
+    has_content = df[content_cols].fillna(0).sum(axis=1) > 0
+    broken_units = ~units_ok & has_content
+    prior = df.loc[broken_units, "Data Issue"]
+    df.loc[broken_units, "Data Issue"] = np.where(
+        prior == "", "Number of Units is blank in the tracker sheet",
+        prior + "; Number of Units is blank in the tracker sheet")
+    df = df[units_ok | broken_units].copy()
+
+    for col in content_cols:
         df[col] = df[col].fillna(0).astype(int)
-    if "Number of H5P Quizzes" in df.columns:
-        df["Number of H5P Quizzes"] = df["Number of H5P Quizzes"].fillna(0).astype(int)
-    df["Number of Units"] = df["Number of Units"].astype(int)
+    df["Number of Units"] = df["Number of Units"].fillna(0).clip(lower=0).astype(int)
     return df
 
 
@@ -91,7 +134,7 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
     df["Guides Completed"] = df["Number of Study Guides"]
     df["Total Required"] = df["Number of Units"] * 3
     df["Total Completed"] = df["Videos Completed"] + df["Podcasts Completed"] + df["Guides Completed"]
-    df["Still Pending"] = df["Total Required"] - df["Total Completed"]
+    df["Still Pending"] = (df["Total Required"] - df["Total Completed"]).clip(lower=0)
     df["Completion %"] = np.where(df["Total Required"] > 0, (df["Total Completed"] / df["Total Required"]) * 100, 0)
     df["Video %"] = np.where(df["Number of Units"] > 0, (df["Videos Completed"] / df["Number of Units"]) * 100, 0)
     df["Podcast %"] = np.where(df["Number of Units"] > 0, (df["Podcasts Completed"] / df["Number of Units"]) * 100, 0)
@@ -99,6 +142,8 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
 
     def get_status(row):
         pct = row["Completion %"]
+        if row["Total Required"] == 0 and row["Total Completed"] > 0:
+            return "In Progress"  # units unknown in the sheet, but work exists
         if pct == 0:
             return "Not Started"
         elif pct < 50:
@@ -144,9 +189,9 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
         return "Very Large (13+ units)"
 
     df["Course Size"] = df["Number of Units"].apply(size_category)
-    df["Videos Pending"] = df["Number of Units"] - df["Videos Completed"]
-    df["Podcasts Pending"] = df["Number of Units"] - df["Podcasts Completed"]
-    df["Guides Pending"] = df["Number of Units"] - df["Guides Completed"]
+    df["Videos Pending"] = (df["Number of Units"] - df["Videos Completed"]).clip(lower=0)
+    df["Podcasts Pending"] = (df["Number of Units"] - df["Podcasts Completed"]).clip(lower=0)
+    df["Guides Pending"] = (df["Number of Units"] - df["Guides Completed"]).clip(lower=0)
     return df
 
 
@@ -165,7 +210,73 @@ def get_courses_df() -> pd.DataFrame | None:
     return _cached("courses_df", loader)
 
 
-# ── Chapter-wise AI video log (NotebookLM) ─────────────────────────
+# ── Data-quality self-check ─────────────────────────────────────────
+# The tracker sheet carries its own totals row ("The Status of the Project",
+# a SUM over every data row). Comparing our computed totals against it every
+# load catches any row the parser mishandles — and any formula drift in the
+# sheet itself — the moment it happens, instead of silently showing wrong
+# numbers.
+
+_SUMMARY_LABELS = {
+    "Number of Units": "Units",
+    "Number of AI Videos": "AI Videos",
+    "Number of Podcasts": "Podcasts",
+    "Number of Study Guides": "Study Guides",
+    "Number of H5P Quizzes": "H5P Quizzes",
+}
+
+
+def get_sheet_summary() -> dict | None:
+    """The baked 'The Status of the Project' totals from the sheet itself."""
+
+    def loader():
+        raw = get_tracker_bytes()
+        if raw is None:
+            return None
+        try:
+            df = pd.read_excel(io.BytesIO(raw), engine="openpyxl")
+            df.columns = df.columns.str.strip()
+            names = df["Course Name"].astype(str)
+            mask = names.str.contains("Status of the Project", case=False, na=False)
+            mask &= ~names.str.contains("%", regex=False)
+            if not mask.any():
+                return None
+            row = df[mask].iloc[0]
+            out = {}
+            for col in _SUMMARY_LABELS:
+                if col in df.columns:
+                    val = pd.to_numeric(row[col], errors="coerce")
+                    if pd.notna(val):
+                        out[col] = int(val)
+            return out or None
+        except Exception:
+            return None
+
+    return _cached("sheet_summary", loader)
+
+
+def get_data_quality() -> dict:
+    """Row-level issues plus a totals cross-check against the sheet's own SUM row."""
+    issues: list[dict] = []
+    mismatches: list[dict] = []
+
+    df = get_courses_df()
+    if df is not None and "Data Issue" in df.columns:
+        flagged = df[df["Data Issue"] != ""]
+        issues = [{"course": str(r["Course Name"]), "issue": str(r["Data Issue"])}
+                  for _, r in flagged.iterrows()]
+
+    summary = get_sheet_summary()
+    if df is not None and summary:
+        for col, label in _SUMMARY_LABELS.items():
+            if col not in summary or col not in df.columns:
+                continue
+            computed = int(df[col].sum())
+            if computed != summary[col]:
+                mismatches.append({"metric": label, "dashboard": computed, "sheet": summary[col]})
+
+    return {"issues": issues, "totalsMismatches": mismatches,
+            "ok": not issues and not mismatches}
 
 def get_video_log_daily() -> pd.DataFrame | None:
     """Daily NotebookLM video counts per person (URL present = complete)."""

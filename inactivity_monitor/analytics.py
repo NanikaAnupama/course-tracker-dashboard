@@ -59,6 +59,11 @@ _DOMAIN_CONTEXT = (
     "team need not add a date every day. Therefore future-dated cells are expected. "
     "Never flag future dates, and never flag a sheet's latest date being older or newer "
     "than the workbook's last-modified time / last_update as 'stale' or 'delayed tracking'.\n"
+    "3. The team does NOT work on Saturdays or Sundays. No output on a weekend is "
+    "expected — never flag a weekend gap, a weekend with zero activity, or a Monday "
+    "figure that is flat versus Friday as inactivity, a slowdown, or an anomaly. "
+    "Inactivity is measured in working_days_since_last_update, which already excludes "
+    "weekends; quote that figure rather than the calendar one.\n"
     "Focus instead on genuine content-progress insights and real threshold breaches."
 )
 
@@ -84,7 +89,9 @@ def _build_user_prompt(status: DataStatus, report_mode: bool = False) -> str:
     payload = {
         "last_update": last_update,
         "last_update_source": status.last_update_source,
-        "days_since_last_update": status.days_inactive,
+        "working_days_since_last_update": status.days_inactive,
+        "calendar_days_since_last_update": status.calendar_days_inactive,
+        "weekends_excluded_from_inactivity": status.weekends_excluded,
         "checked_at": status.checked_at.isoformat(),
         "workbook_digest": status.digest,
     }
@@ -236,9 +243,10 @@ async def synthesise_analysis(
 def _fallback_result(status: DataStatus, model: str) -> AnalysisResult:
     """Deterministic analysis used when the LLM is unreachable."""
     days = status.days_inactive
+    unit = "working day(s)" if status.weekends_excluded else "day(s)"
     return AnalysisResult(
         headline=(
-            f"Tracker data has not updated in {days} day(s) — "
+            f"Tracker data has not updated in {days} {unit} — "
             "automated analysis unavailable."
         ),
         critical_findings=[

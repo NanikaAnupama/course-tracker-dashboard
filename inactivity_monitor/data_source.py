@@ -24,6 +24,7 @@ import pandas as pd
 
 from .config import MonitorConfig
 from .metrics import build_metrics
+from .workdays import calendar_days_between, working_days_between
 
 logger = logging.getLogger(__name__)
 
@@ -54,8 +55,15 @@ class DataStatus:
 
     last_update: Optional[datetime]
     last_update_source: str  # "http-header" | "workbook-dates" | "unknown"
+    # Gap used for the stale decision. With ``EXCLUDE_WEEKENDS_FROM_INACTIVITY``
+    # on (the default) this counts working days only — Sat/Sun contribute zero,
+    # since nobody is expected to update the tracker then.
     days_inactive: Optional[float]
     is_stale: bool
+    # Raw elapsed days including the weekend, kept for display and for the LLM
+    # so the card can still say how long it has really been.
+    calendar_days_inactive: Optional[float] = None
+    weekends_excluded: bool = False
     digest: Dict[str, Any] = field(default_factory=dict)
     checked_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -205,10 +213,19 @@ async def get_data_status(config: MonitorConfig) -> DataStatus:
     digest = build_data_digest(file_bytes)
 
     days_inactive: Optional[float] = None
+    calendar_days: Optional[float] = None
     is_stale = False
     if last_update is not None:
-        delta = datetime.now(timezone.utc) - last_update
-        days_inactive = round(delta.total_seconds() / 86400.0, 2)
+        now = datetime.now(timezone.utc)
+        calendar_days = calendar_days_between(last_update, now)
+        # The team does not work at weekends, so a Saturday/Sunday gap must not
+        # push the tracker over the inactivity threshold. Only this decision
+        # skips the weekend — every other metric stays calendar-based.
+        days_inactive = (
+            working_days_between(last_update, now, config.business_timezone)
+            if config.exclude_weekends_from_inactivity
+            else calendar_days
+        )
         is_stale = days_inactive > config.inactivity_threshold_days
 
     status = DataStatus(
@@ -216,13 +233,19 @@ async def get_data_status(config: MonitorConfig) -> DataStatus:
         last_update_source=source,
         days_inactive=days_inactive,
         is_stale=is_stale,
+        calendar_days_inactive=calendar_days,
+        weekends_excluded=config.exclude_weekends_from_inactivity,
         digest=digest,
     )
     logger.info(
-        "Freshness: last_update=%s (%s), days_inactive=%s, stale=%s",
+        "Freshness: last_update=%s (%s), days_inactive=%s (%s), calendar_days=%s, stale=%s",
         last_update.isoformat() if last_update else "unknown",
         source,
         days_inactive,
+        "working days, weekends excluded"
+        if config.exclude_weekends_from_inactivity
+        else "calendar days",
+        calendar_days,
         is_stale,
     )
     return status

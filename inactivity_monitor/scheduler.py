@@ -10,11 +10,13 @@ Public entry points:
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from typing import Optional
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
+from .alert_state import clear_state, episode_key, save_state, should_alert
 from .analytics import synthesise_analysis
 from .config import MonitorConfig
 from .data_source import DataStatus, get_data_status
@@ -26,6 +28,7 @@ from .snapshot import (
     save_snapshot,
 )
 from .teams import build_adaptive_card, send_teams_alert
+from .workdays import is_weekend, next_working_moment
 
 logger = logging.getLogger(__name__)
 
@@ -55,9 +58,16 @@ async def _analyse_and_send(
 async def run_inactivity_check(config: MonitorConfig) -> DataStatus:
     """Execute the full pipeline once: fetch → evaluate → (analyse → alert).
 
-    The LLM + Teams steps only run when the data is stale. Returns the
-    ``DataStatus`` so callers can inspect the outcome (handy for tests and
-    for an on-demand FastAPI endpoint).
+    The LLM + Teams steps only run when the data is stale, and (by default)
+    never on a Saturday or Sunday — the team does not work then, so neither the
+    elapsed-time count nor the warning itself should treat the weekend as
+    working time.
+
+    A stale episode produces exactly ONE warning: the check runs hourly, but
+    repeating the same message every hour only teaches the team to mute the
+    channel. The alarm re-arms itself as soon as the tracker is updated again.
+    Returns the ``DataStatus`` so callers can inspect the outcome (handy for
+    tests and for an on-demand FastAPI endpoint).
     """
     try:
         status = await get_data_status(config)
@@ -65,21 +75,52 @@ async def run_inactivity_check(config: MonitorConfig) -> DataStatus:
         logger.exception("Inactivity check failed while fetching data status")
         raise
 
+    now = datetime.now(timezone.utc)
+    if config.exclude_weekends_from_inactivity and is_weekend(now, config.business_timezone):
+        resumes = next_working_moment(now, config.business_timezone)
+        logger.info(
+            "Weekend in %s — inactivity alerts are suppressed until %s; no alert sent.",
+            config.business_timezone,
+            resumes.strftime("%a %d %b %H:%M") if resumes else "the next working day",
+        )
+        return status
+
     if not status.is_stale:
         logger.info(
             "Data is fresh (%.2f day(s) <= %.2f threshold); no alert sent.",
             status.days_inactive if status.days_inactive is not None else -1,
             config.inactivity_threshold_days,
         )
+        # Fresh data closes the previous episode and re-arms the alarm.
+        clear_state(config.alert_state_path)
+        return status
+
+    key = episode_key(status.last_update)
+    send, reason = should_alert(
+        config.alert_state_path, key, config.alert_repeat_after_days
+    )
+    if not send:
+        logger.info(
+            "Data is STALE (%.2f day(s)) but no alert sent: %s.",
+            status.days_inactive if status.days_inactive is not None else -1,
+            reason,
+        )
         return status
 
     logger.warning(
-        "Data is STALE (%.2f day(s) > %.2f threshold); triggering analysis pipeline.",
+        "Data is STALE (%.2f day(s) > %.2f threshold); triggering analysis pipeline (%s).",
         status.days_inactive if status.days_inactive is not None else -1,
         config.inactivity_threshold_days,
+        reason,
     )
 
-    await _analyse_and_send(config, status, report_mode=False)
+    sent = await _analyse_and_send(config, status, report_mode=False)
+    # Only mark the episode as alerted once Teams actually accepted the card,
+    # so a failed delivery is retried on the next check rather than swallowed.
+    if sent:
+        save_state(config.alert_state_path, key, status.days_inactive)
+    else:
+        logger.warning("Inactivity alert not delivered; will retry on next check.")
     return status
 
 
@@ -138,7 +179,9 @@ def create_scheduler(config: MonitorConfig) -> AsyncIOScheduler:
 
     Two independent jobs (either can be disabled via env vars):
       * Inactivity alarm – every ``CHECK_INTERVAL_MINUTES`` (default 60),
-        sends only when the data is stale.
+        sends only when the data is stale, at most once per stale episode, and
+        skips Saturdays/Sundays entirely (see
+        ``EXCLUDE_WEEKENDS_FROM_INACTIVITY``).
       * Scheduled report – fires on ``DAILY_REPORT_DAYS`` (default Mon & Fri) at
         ``DAILY_REPORT_TIME`` in ``DAILY_REPORT_TIMEZONE`` (default 12:45
         Asia/Kolkata), always sends, and includes the % change since the last
@@ -157,9 +200,12 @@ def create_scheduler(config: MonitorConfig) -> AsyncIOScheduler:
             replace_existing=True,
         )
         logger.info(
-            "Inactivity alarm enabled: every %d minute(s), threshold %.2f day(s).",
+            "Inactivity alarm enabled: every %d minute(s), threshold %.2f %s.",
             config.check_interval_minutes,
             config.inactivity_threshold_days,
+            f"working day(s) (weekends excluded, {config.business_timezone})"
+            if config.exclude_weekends_from_inactivity
+            else "calendar day(s)",
         )
 
     if config.daily_report_enabled:

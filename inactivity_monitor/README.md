@@ -14,8 +14,13 @@ Two independent jobs run inside one scheduler (either can be disabled):
 INACTIVITY ALARM  (every CHECK_INTERVAL_MINUTES, default 60)
   download workbook (?download=1)
   ─▶ determine "last update":  1. HTTP Last-Modified  2. newest date cell (fallback)
-  ─▶ ONLY IF older than INACTIVITY_THRESHOLD_DAYS:
+  ─▶ SKIP entirely on Saturday/Sunday (the team does not work then)
+  ─▶ ONLY IF older than INACTIVITY_THRESHOLD_DAYS *working* days
+     (weekend time counts as zero):
+  ─▶ ONLY IF this stale episode has not already been warned about
+     (one message per episode — no hourly repeats):
        OpenRouter LLM → Adaptive Card "⚠️ Inactivity Warning" → Teams
+  ─▶ once the tracker is updated again, the alarm re-arms itself
 
 DAILY REPORT  (every day at DAILY_REPORT_TIME, default 12:45 Asia/Kolkata)
   download workbook
@@ -31,6 +36,8 @@ DAILY REPORT  (every day at DAILY_REPORT_TIME, default 12:45 Asia/Kolkata)
 | `analytics.py`   | Calls OpenRouter, normalises the JSON analysis. |
 | `teams.py`       | Builds the Adaptive Card and POSTs it (256 KB-safe). |
 | `scheduler.py`   | Pipeline orchestration + APScheduler + FastAPI hooks. |
+| `workdays.py`    | Working-day arithmetic — excludes Sat/Sun from the inactivity gap. |
+| `alert_state.py` | Remembers the warned-about stale episode — one alert, not hourly repeats. |
 | `__main__.py`    | Standalone CLI runner (`python -m inactivity_monitor`). |
 
 ## 1. Install
@@ -53,8 +60,12 @@ Copy `.env.example` to `.env` and fill in the two required secrets:
 | `OPENROUTER_SITE_URL`       |    | — | Optional OpenRouter `HTTP-Referer`. |
 | `OPENROUTER_APP_NAME`       |    | `Course Tracker Inactivity Monitor` | OpenRouter `X-Title`. |
 | `ENABLE_INACTIVITY_ALARM`   |    | `true` | Turn the stale-data alarm on/off. |
-| `INACTIVITY_THRESHOLD_DAYS` |    | `2` | Alarm when data is older than this. |
+| `INACTIVITY_THRESHOLD_DAYS` |    | `2` | Alarm when data is older than this many **working** days. |
 | `CHECK_INTERVAL_MINUTES`    |    | `60` | How often the alarm re-checks. |
+| `EXCLUDE_WEEKENDS_FROM_INACTIVITY` | | `true` | Sat/Sun count as zero elapsed time and no warning is sent on those days. Affects the alarm only. |
+| `BUSINESS_TIMEZONE`         |    | `DAILY_REPORT_TIMEZONE` | IANA tz used to decide which days are the weekend. |
+| `ALERT_REPEAT_AFTER_DAYS`   |    | `0` | Re-warn about a still-unresolved episode after N days. `0` = one message only. |
+| `ALERT_STATE_PATH`          |    | `inactivity_monitor/last_alert_state.json` | Where the "already warned" record lives. |
 | `ENABLE_DAILY_REPORT`       |    | `true` | Turn the daily digest on/off. |
 | `DAILY_REPORT_TIME`         |    | `12:45` | Daily send time, 24h `HH:MM`. |
 | `DAILY_REPORT_TIMEZONE`     |    | `Asia/Kolkata` | IANA tz for the daily time. |

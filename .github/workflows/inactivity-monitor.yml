@@ -93,21 +93,31 @@ jobs:
           OPENROUTER_MODEL: ${{ vars.OPENROUTER_MODEL }}
         run: python -m inactivity_monitor ${{ steps.resolve.outputs.args }}
 
-      # Persist the % change baseline. The report run rewrites
-      # last_report_snapshot.json; commit it so the next Mon/Fri run can diff
-      # against it. The hourly alarm never touches the file, so there's nothing
-      # to commit on those runs and this step is a harmless no-op.
-      - name: Commit report snapshot
-        if: steps.resolve.outputs.args == '--report'
+      # Persist the two bits of state that must survive between ephemeral runs:
+      #   * last_report_snapshot.json — the % change baseline (report runs).
+      #   * last_alert_state.json     — which stale episode has already been
+      #     warned about, so the hourly alarm sends ONE message per episode
+      #     instead of repeating every hour. Deleted again once data is fresh.
+      # `git add -A` per file covers a deletion as well as a create/update, and
+      # staging each path separately keeps an absent, never-tracked file from
+      # failing the whole command. Only what actually changed gets committed.
+      - name: Commit monitor state
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add inactivity_monitor/last_report_snapshot.json
+          for f in inactivity_monitor/last_report_snapshot.json inactivity_monitor/last_alert_state.json; do
+            if [ -e "$f" ] || git ls-files --error-unmatch "$f" >/dev/null 2>&1; then
+              git add -A -- "$f"
+            fi
+          done
           # --cached catches both a brand-new (untracked) file and edits to an
           # existing one; only commit/push when something actually changed.
           if ! git diff --cached --quiet; then
-            git commit -m "chore: update report snapshot baseline [skip ci]"
+            git commit -m "chore: update inactivity monitor state [skip ci]"
+            # The hourly alarm and the report can race a push; rebase onto
+            # whatever landed first rather than failing the run.
+            git pull --rebase --autostash
             git push
           else
-            echo "Snapshot unchanged; nothing to commit."
+            echo "Monitor state unchanged; nothing to commit."
           fi

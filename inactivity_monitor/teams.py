@@ -163,9 +163,16 @@ def build_adaptive_card(
         if status.last_update
         else "Unknown"
     )
-    days_inactive = (
-        f"{status.days_inactive} day(s)" if status.days_inactive is not None else "Unknown"
-    )
+    if status.days_inactive is None:
+        days_inactive = "Unknown"
+    elif status.weekends_excluded:
+        # Weekends are not working time, so the headline figure counts working
+        # days; the calendar gap follows in brackets for context.
+        days_inactive = f"{status.days_inactive} working day(s)"
+        if status.calendar_days_inactive is not None:
+            days_inactive += f" ({status.calendar_days_inactive} calendar day(s))"
+    else:
+        days_inactive = f"{status.days_inactive} day(s)"
 
     if report_mode:
         header_text = "📊 Daily Analytics Report"

@@ -27,6 +27,11 @@ DEFAULT_OPENROUTER_MODEL = "deepseek/deepseek-v3.2-exp"
 # Actions workflow can commit it back to the repo between runs.
 DEFAULT_SNAPSHOT_PATH = os.path.join(os.path.dirname(__file__), "last_report_snapshot.json")
 
+# Records the stale episode we have already warned about, so the hourly alarm
+# sends one message per episode instead of repeating every hour. Also committed
+# back to the repo by the GitHub Actions workflow.
+DEFAULT_ALERT_STATE_PATH = os.path.join(os.path.dirname(__file__), "last_alert_state.json")
+
 # Days the scheduled report goes out (APScheduler/cron day-of-week tokens).
 DEFAULT_REPORT_DAYS = "mon,fri"
 
@@ -86,6 +91,15 @@ class MonitorConfig:
     teams_webhook_url: str
     inactivity_threshold_days: float
     check_interval_minutes: int
+    # Saturday/Sunday are non-working days: when True the inactivity alarm
+    # measures the gap in working days only, so a quiet weekend never triggers
+    # a message. Weekends are judged in ``business_timezone``.
+    exclude_weekends_from_inactivity: bool
+    business_timezone: str
+    # One warning per stale episode: where that fact is stored, and after how
+    # many days (0 = never) a still-unresolved episode may warn again.
+    alert_state_path: str
+    alert_repeat_after_days: float
     http_timeout_seconds: float
     # Optional OpenRouter attribution headers (recommended by OpenRouter).
     openrouter_site_url: Optional[str]
@@ -110,6 +124,7 @@ class MonitorConfig:
         api_key = (os.getenv("OPENROUTER_API_KEY") or "").strip()
         webhook = (os.getenv("TEAMS_WEBHOOK_URL") or "").strip()
         report_hour, report_minute = _parse_hhmm("DAILY_REPORT_TIME", "12:45")
+        report_timezone = (os.getenv("DAILY_REPORT_TIMEZONE") or "Asia/Kolkata").strip()
 
         missing = []
         if not api_key:
@@ -131,6 +146,13 @@ class MonitorConfig:
             teams_webhook_url=webhook,
             inactivity_threshold_days=_get_float("INACTIVITY_THRESHOLD_DAYS", 2.0),
             check_interval_minutes=_get_int("CHECK_INTERVAL_MINUTES", 60),
+            exclude_weekends_from_inactivity=_get_bool(
+                "EXCLUDE_WEEKENDS_FROM_INACTIVITY", True
+            ),
+            # Defaults to the report timezone: the same working week applies.
+            business_timezone=(os.getenv("BUSINESS_TIMEZONE") or report_timezone).strip(),
+            alert_state_path=(os.getenv("ALERT_STATE_PATH") or DEFAULT_ALERT_STATE_PATH).strip(),
+            alert_repeat_after_days=_get_float("ALERT_REPEAT_AFTER_DAYS", 0.0),
             http_timeout_seconds=_get_float("HTTP_TIMEOUT_SECONDS", 30.0),
             openrouter_site_url=(os.getenv("OPENROUTER_SITE_URL") or None),
             openrouter_app_name=(os.getenv("OPENROUTER_APP_NAME") or "Course Tracker Inactivity Monitor"),
@@ -138,7 +160,7 @@ class MonitorConfig:
             daily_report_enabled=_get_bool("ENABLE_DAILY_REPORT", True),
             daily_report_hour=report_hour,
             daily_report_minute=report_minute,
-            daily_report_timezone=(os.getenv("DAILY_REPORT_TIMEZONE") or "Asia/Kolkata").strip(),
+            daily_report_timezone=report_timezone,
             daily_report_days=(os.getenv("DAILY_REPORT_DAYS") or DEFAULT_REPORT_DAYS).strip(),
             report_snapshot_path=(os.getenv("REPORT_SNAPSHOT_PATH") or DEFAULT_SNAPSHOT_PATH).strip(),
         )

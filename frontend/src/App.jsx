@@ -72,13 +72,15 @@ export default function App() {
   const initial = window.location.hash.replace('#', '')
   const [page, setPage] = useState(PAGES[initial] ? initial : 'overview')
   const [wsSelected, setWsSelected] = useState('all')
-  const wsMeta = useApi('/api/workstreams')
-  const wsNames = wsMeta.data?.workstreams || []
   const [statsOpen, setStatsOpen] = useState(false)
   const [wsOpen, setWsOpen] = useState(false)
   const [navOpen, setNavOpen] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const [reloadKey, setReloadKey] = useState(0)
+  // Refresh re-runs this too: a one-off failure here used to leave the
+  // Production Workstreams group permanently empty until a full page reload.
+  const wsMeta = useApi('/api/workstreams', reloadKey)
+  const wsNames = wsMeta.data?.workstreams || []
 
   const go = (p) => { setPage(p); setNavOpen(false); window.location.hash = p }
 
@@ -132,7 +134,7 @@ export default function App() {
 
         <button
           className={`nav-item ${page === 'workstreams' && !wsOpen ? 'active' : ''}`}
-          onClick={() => setWsOpen((o) => !o)}
+          onClick={() => { setWsOpen((o) => !o); go('workstreams') }}
         >
           <span>🏭</span> Production Workstreams
           <span className={`chev ${wsOpen ? 'open' : ''}`}>▶</span>
@@ -148,6 +150,15 @@ export default function App() {
                 {w}
               </button>
             ))}
+            {!wsNames.length && (
+              <div className="nav-note">
+                {wsMeta.loading
+                  ? 'Loading workstreams…'
+                  : wsMeta.error
+                    ? 'Workstream list unavailable — use ⟳ Refresh Data'
+                    : 'No workstreams in the Content Production sheet yet'}
+              </div>
+            )}
           </div>
         )}
 

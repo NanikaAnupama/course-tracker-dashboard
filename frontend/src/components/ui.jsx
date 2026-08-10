@@ -3,7 +3,9 @@ import { fetchJson } from '../api'
 import { STATUS_COLORS } from '../theme'
 import { fmtPct } from '../utils'
 
-export function useApi(path) {
+// `reloadKey` lets a long-lived caller (the sidebar) re-fetch after a failure —
+// pages remount on navigation, but App-level fetches otherwise run only once.
+export function useApi(path, reloadKey = 0) {
   const [state, setState] = useState({ data: null, error: null, loading: true })
   useEffect(() => {
     let alive = true
@@ -12,7 +14,7 @@ export function useApi(path) {
       .then((data) => alive && setState({ data, error: null, loading: false }))
       .catch((error) => alive && setState({ data: null, error, loading: false }))
     return () => { alive = false }
-  }, [path])
+  }, [path, reloadKey])
   return state
 }
 

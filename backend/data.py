@@ -8,6 +8,7 @@ only the presentation layer moved to React.
 from __future__ import annotations
 
 import io
+import logging
 import re
 import time
 import threading
@@ -20,6 +21,8 @@ TRACKER_URL = "https://globaledulinkuk-my.sharepoint.com/:x:/g/personal/sadeev_i
 TEXTBOOK_URL = "https://globaledulinkuk-my.sharepoint.com/:x:/g/personal/sadeev_imperiallearning_co_uk/IQC_Trx-ci8SSozWqvstwuKwATXY7Xl96n-kik3FIVmhdRo?download=1"
 
 CACHE_TTL_SECONDS = 300
+
+log = logging.getLogger(__name__)
 
 _cache: dict[str, tuple[float, object]] = {}
 _cache_lock = threading.Lock()
@@ -48,8 +51,10 @@ def _download(url: str) -> bytes | None:
         response = requests.get(url, headers=headers, timeout=30)
         if response.status_code == 200:
             return response.content
+        log.warning("download of %s returned HTTP %s", url, response.status_code)
         return None
     except Exception:
+        log.exception("download of %s failed", url)
         return None
 
 
@@ -205,6 +210,7 @@ def get_courses_df() -> pd.DataFrame | None:
             df = clean_and_preprocess(df)
             return engineer_features(df)
         except Exception:
+            log.exception("failed to parse sheet")
             return None
 
     return _cached("courses_df", loader)
@@ -250,6 +256,7 @@ def get_sheet_summary() -> dict | None:
                         out[col] = int(val)
             return out or None
         except Exception:
+            log.exception("failed to parse sheet")
             return None
 
     return _cached("sheet_summary", loader)
@@ -325,6 +332,7 @@ def get_video_log_daily() -> pd.DataFrame | None:
             daily.rename(columns={"NB_Person": "Person"}, inplace=True)
             return daily
         except Exception:
+            log.exception("failed to parse sheet")
             return None
 
     return _cached("nb_daily", loader)
@@ -370,6 +378,7 @@ def get_webtool_daily() -> pd.DataFrame | None:
             long_df = long_df[long_df["Person"].isin(active_persons)].copy()
             return long_df
         except Exception:
+            log.exception("failed to parse sheet")
             return None
 
     return _cached("wt_daily", loader)
@@ -429,6 +438,7 @@ def get_course_page_daily() -> pd.DataFrame | None:
             long_df = long_df[long_df["Date"].isin(active_dates)].copy()
             return long_df.sort_values("Date").reset_index(drop=True)
         except Exception:
+            log.exception("failed to parse sheet")
             return None
 
     return _cached("cp_daily", loader)
@@ -479,12 +489,15 @@ def get_content_production() -> pd.DataFrame | None:
                     person_col = cols[i + 1]
 
                 counts = pd.to_numeric(df[col], errors="coerce")
-                persons = (df[person_col].astype(str).str.strip()
+                # pandas 2 turns a blank cell into the string "nan" here while
+                # pandas 3 keeps it as NA — fill first so both give "".
+                persons = (df[person_col].astype(str).str.strip().fillna("")
                            if person_col is not None else pd.Series("", index=df.index))
                 for date, count, person in zip(df["Date"], counts, persons):
                     if pd.isna(count) or count <= 0:
                         continue
-                    p = person if person and person.lower() not in ("nan", "none", "") else "Unassigned"
+                    person = "" if pd.isna(person) else str(person).strip()
+                    p = person if person.lower() not in ("nan", "none", "") else "Unassigned"
                     records.append({"Date": date, "Workstream": name, "Person": p, "Count": int(count)})
 
             long_df = (pd.DataFrame(records)
@@ -495,6 +508,7 @@ def get_content_production() -> pd.DataFrame | None:
             long_df.attrs["workstream_order"] = column_order
             return long_df
         except Exception:
+            log.exception("failed to parse sheet")
             return None
 
     return _cached("content_production", loader)
@@ -510,6 +524,7 @@ def get_textbook_df() -> pd.DataFrame | None:
         try:
             df = pd.read_excel(io.BytesIO(raw), sheet_name="DashboardSheet")
         except Exception:
+            log.exception("failed to parse sheet")
             return None
         try:
             df.columns = ["Course Name", "Course Link", "Units", "Pages",
@@ -547,6 +562,7 @@ def get_textbook_df() -> pd.DataFrame | None:
             df["Qualification"] = df["Course Name"].apply(get_type)
             return df
         except Exception:
+            log.exception("failed to parse sheet")
             return None
 
     return _cached("textbook_df", loader)

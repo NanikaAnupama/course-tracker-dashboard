@@ -1,9 +1,12 @@
 fastapi>=0.110
 uvicorn[standard]>=0.29
-pandas>=2.0
-openpyxl>=3.1
+# Majors are capped so Railway installs the same generation of the parsing
+# stack that the sheet parsers are developed and tested against — an
+# unpinned pandas silently jumped to 3.x in prod and broke sheet parsing.
+pandas>=2.2,<3.0
+openpyxl>=3.1,<4.0
 requests>=2.31
-numpy>=1.26
+numpy>=1.26,<3.0
 # Inactivity monitor (hosted in-process by the API)
 apscheduler>=3.10
 httpx>=0.27
